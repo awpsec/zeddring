@@ -17,4 +17,14 @@ services:
       - ZEDDRING_RETRY_DELAY=300
       - ZEDDRING_WEB_HOST=0.0.0.0
       - ZEDDRING_WEB_PORT=5000
-      - ZEDDRING_DEBUG=False 
+      - ZEDDRING_DEBUG=False
+    ports:
+      - "5000:5000"     # Web interface
+    devices:
+      - "/dev/ttyAMA0:/dev/ttyAMA0"
+      - "/dev/vcio:/dev/vcio"
+      - "/dev/gpiomem:/dev/gpiomem"
+    # Add capabilities for Bluetooth
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW 

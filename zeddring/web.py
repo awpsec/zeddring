@@ -4,13 +4,15 @@ import os
 import logging
 from typing import Dict, Any, List, Optional
 import datetime
+import asyncio
+import json
 
 from flask import Flask, render_template, request, jsonify, redirect, url_for, abort
 from flask_cors import CORS
 
 from zeddring.config import WEB_HOST, WEB_PORT, DEBUG
 from zeddring.database import Database
-from zeddring.ring_manager import RingManager
+from zeddring.ring_manager import RingManager, get_ring_manager
 
 # Configure logging
 logging.basicConfig(
@@ -27,161 +29,168 @@ CORS(app)
 
 # Initialize database and ring manager
 db = Database()
-ring_manager = RingManager(db)
+ring_manager = None
 
+def init_app(db_path=None):
+    """Initialize the app with the ring manager."""
+    global ring_manager
+    ring_manager = get_ring_manager(db_path)
+    return app
 
 @app.route('/')
 def index():
-    """Render the main dashboard."""
-    rings = ring_manager.get_ring_status()
+    """Render the dashboard page."""
+    rings = ring_manager.get_all_rings()
     return render_template('index.html', rings=rings)
-
 
 @app.route('/ring/<int:ring_id>')
 def ring_detail(ring_id):
-    """Render the detail page for a specific ring."""
-    ring = ring_manager.get_ring_by_id(ring_id)
+    """Render the ring detail page."""
+    ring = ring_manager.get_ring(ring_id)
     if not ring:
         return redirect(url_for('index'))
         
-    return render_template('ring_detail.html', ring=ring)
-
-
-@app.route('/api/rings')
-def api_rings():
-    """API endpoint to get all rings."""
-    rings = ring_manager.get_ring_status()
-    return jsonify(rings)
-
-
-@app.route('/api/ring/<int:ring_id>')
-def api_ring(ring_id):
-    """API endpoint to get a specific ring."""
-    ring = ring_manager.get_ring_by_id(ring_id)
-    if not ring:
-        return jsonify({"error": "Ring not found"}), 404
-    return jsonify(ring)
-
-
-@app.route('/api/ring/<int:ring_id>/heart-rate')
-def api_heart_rate(ring_id):
-    """API endpoint to get heart rate data for a specific ring."""
-    days = request.args.get('days', default=1, type=int)
+    # Get daily data for today
+    today = datetime.datetime.now().strftime("%Y-%m-%d")
+    daily_data = ring_manager.get_daily_data(ring_id, today)
     
-    # Calculate start and end times
-    end_time = datetime.datetime.now()
-    start_time = end_time - datetime.timedelta(days=days)
-    
-    # Get data from database
-    data = db.get_heart_rate_data(ring_id, start_time, end_time)
-    
-    return jsonify(data)
+    return render_template('ring_detail.html', ring=ring.to_dict(), daily_data=daily_data)
 
-
-@app.route('/api/ring/<int:ring_id>/steps')
-def api_steps(ring_id):
-    """API endpoint to get steps data for a specific ring."""
-    days = request.args.get('days', default=1, type=int)
-    
-    # Calculate start and end times
-    end_time = datetime.datetime.now()
-    start_time = end_time - datetime.timedelta(days=days)
-    
-    # Get data from database
-    data = db.get_steps_data(ring_id, start_time, end_time)
-    
-    return jsonify(data)
-
-
-@app.route('/api/ring/<int:ring_id>/heart-rate/stats')
-def api_heart_rate_stats(ring_id):
-    """API endpoint to get heart rate statistics for a specific ring."""
-    days = request.args.get('days', default=30, type=int)
-    
-    # Get data from database
-    data = db.get_daily_heart_rate_stats(ring_id, days)
-    
-    return jsonify(data)
-
-
-@app.route('/api/ring/<int:ring_id>/steps/stats')
-def api_steps_stats(ring_id):
-    """API endpoint to get steps statistics for a specific ring."""
-    days = request.args.get('days', default=30, type=int)
-    
-    # Get data from database
-    data = db.get_daily_steps_stats(ring_id, days)
-    
-    return jsonify(data)
-
-
-@app.route('/api/ring/<int:ring_id>/rename', methods=['POST'])
-def api_rename_ring(ring_id):
-    """API endpoint to rename a ring."""
-    data = request.get_json()
-    if not data or 'name' not in data:
-        return jsonify({"error": "Name is required"}), 400
-        
-    name = data['name']
-    success = ring_manager.rename_ring(ring_id, name)
-    
-    if success:
-        return jsonify({"success": True})
-    else:
-        return jsonify({"error": "Failed to rename ring"}), 500
-
-
-@app.route('/api/ring/<int:ring_id>/reboot', methods=['POST'])
-def api_reboot_ring(ring_id):
-    """API endpoint to reboot a ring."""
-    success = ring_manager.reboot_ring(ring_id)
-    
-    if success:
-        return jsonify({"success": True})
-    else:
-        return jsonify({"error": "Failed to reboot ring"}), 500
-
-
-@app.route('/api/ring/<int:ring_id>/connect', methods=['POST'])
-def api_connect_ring(ring_id):
-    """API endpoint to connect to a ring."""
-    success = ring_manager.connect_ring(ring_id)
-    
-    if success:
-        return jsonify({"success": True})
-    else:
-        return jsonify({"error": "Failed to connect to ring"}), 500
-
-
-@app.route('/api/ring/<int:ring_id>/disconnect', methods=['POST'])
-def api_disconnect_ring(ring_id):
-    """API endpoint to disconnect from a ring."""
-    success = ring_manager.disconnect_ring(ring_id)
-    
-    if success:
-        return jsonify({"success": True})
-    else:
-        return jsonify({"error": "Failed to disconnect from ring"}), 500
-
+@app.route('/api/rings', methods=['GET'])
+def get_rings():
+    """Get all rings."""
+    rings = ring_manager.get_all_rings()
+    return jsonify({
+        "success": True,
+        "rings": rings
+    })
 
 @app.route('/api/ring/add', methods=['POST'])
-def api_add_ring():
-    """API endpoint to add a new ring."""
-    data = request.get_json()
-    if not data or 'mac_address' not in data:
-        return jsonify({"error": "MAC address is required"}), 400
+def add_ring():
+    """Add a new ring."""
+    name = request.form.get('name')
+    mac_address = request.form.get('mac_address')
+    
+    if not name or not mac_address:
+        return jsonify({
+            "success": False,
+            "error": "Name and MAC address are required"
+        })
         
-    mac_address = data['mac_address']
-    name = data.get('name')
+    ring_id = ring_manager.add_ring(name, mac_address)
     
-    # Add ring to database
-    ring_id = db.add_or_update_ring(mac_address, name)
-    
-    # Reload known rings
-    ring_manager._load_known_rings()
-    
-    return jsonify({"success": True, "ring_id": ring_id})
+    if ring_id:
+        return jsonify({
+            "success": True,
+            "ring_id": ring_id
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to add ring"
+        })
 
+@app.route('/api/ring/<int:ring_id>/remove', methods=['POST'])
+def remove_ring(ring_id):
+    """Remove a ring."""
+    success = ring_manager.remove_ring(ring_id)
+    
+    return jsonify({
+        "success": success,
+        "error": "Failed to remove ring" if not success else None
+    })
+
+@app.route('/api/ring/<int:ring_id>/connect', methods=['POST'])
+def connect_ring(ring_id):
+    """Connect to a ring."""
+    # Create a new event loop for this request
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Connect to the ring
+    success = loop.run_until_complete(ring_manager.connect_ring(ring_id))
+    
+    # Close the loop
+    loop.close()
+    
+    return jsonify({
+        "success": success,
+        "error": "Failed to connect to ring" if not success else None
+    })
+
+@app.route('/api/ring/<int:ring_id>/disconnect', methods=['POST'])
+def disconnect_ring(ring_id):
+    """Disconnect from a ring."""
+    # Create a new event loop for this request
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Disconnect from the ring
+    success = loop.run_until_complete(ring_manager.disconnect_ring(ring_id))
+    
+    # Close the loop
+    loop.close()
+    
+    return jsonify({
+        "success": success,
+        "error": "Failed to disconnect from ring" if not success else None
+    })
+
+@app.route('/api/ring/<int:ring_id>/data', methods=['GET'])
+def get_ring_data(ring_id):
+    """Get data from a ring."""
+    # Create a new event loop for this request
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Get data from the ring
+    data = loop.run_until_complete(ring_manager.get_ring_data(ring_id))
+    
+    # Close the loop
+    loop.close()
+    
+    if data:
+        # Save data to database
+        ring_manager.save_ring_data(ring_id, data)
+        
+        return jsonify({
+            "success": True,
+            "data": data
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to get data from ring"
+        })
+
+@app.route('/api/ring/<int:ring_id>/history', methods=['GET'])
+def get_ring_history(ring_id):
+    """Get ring data history."""
+    days = request.args.get('days', 7, type=int)
+    
+    history = ring_manager.get_ring_history(ring_id, days)
+    
+    return jsonify({
+        "success": True,
+        "history": history
+    })
+
+@app.route('/api/ring/<int:ring_id>/daily', methods=['GET'])
+def get_daily_data(ring_id):
+    """Get daily data for a ring."""
+    date = request.args.get('date')
+    
+    daily_data = ring_manager.get_daily_data(ring_id, date)
+    
+    return jsonify({
+        "success": True,
+        "data": daily_data
+    })
+
+# Custom Jinja2 filter for JSON serialization
+@app.template_filter('tojson')
+def to_json(value):
+    return json.dumps(value)
 
 def start_web_server():
     """Start the web server."""
