@@ -1,4 +1,5 @@
 flask==2.3.3
 flask-cors==3.0.10
 bleak>=0.22.2,<0.23.0
-git+https://github.com/tahnok/colmi_r02_client.git 
+# Install the colmi_r02_client package
+git+https://github.com/tahnok/colmi_r02_client.git@v0.1.0 

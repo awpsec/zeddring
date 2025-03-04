@@ -20,8 +20,59 @@ logger = logging.getLogger("zeddring.ring_manager")
 
 # Try to import the colmi_r02_client package
 try:
-    from colmi_r02_client import Client as ColmiClient
-    COLMI_CLIENT_AVAILABLE = True
+    # Try different possible class names
+    try:
+        from colmi_r02_client import Client as ColmiClient
+        COLMI_CLIENT_AVAILABLE = True
+    except ImportError:
+        try:
+            from colmi_r02_client import ColmiR02Client as ColmiClient
+            COLMI_CLIENT_AVAILABLE = True
+        except ImportError:
+            try:
+                from colmi_r02_client import ColmiClient
+                COLMI_CLIENT_AVAILABLE = True
+            except ImportError:
+                try:
+                    # Try importing from submodules
+                    from colmi_r02_client.client import Client as ColmiClient
+                    COLMI_CLIENT_AVAILABLE = True
+                except ImportError:
+                    try:
+                        from colmi_r02_client.client import ColmiR02Client as ColmiClient
+                        COLMI_CLIENT_AVAILABLE = True
+                    except ImportError:
+                        try:
+                            from colmi_r02_client.client import ColmiClient
+                            COLMI_CLIENT_AVAILABLE = True
+                        except ImportError:
+                            try:
+                                # Try importing from custom_client
+                                from colmi_r02_client.custom_client import Client as ColmiClient
+                                COLMI_CLIENT_AVAILABLE = True
+                            except ImportError:
+                                # Try to dynamically find a client class in the package
+                                try:
+                                    import colmi_r02_client
+                                    import inspect
+                                    
+                                    # Find all classes in the module
+                                    client_classes = [obj for name, obj in inspect.getmembers(colmi_r02_client) 
+                                                    if inspect.isclass(obj) and obj.__module__ == 'colmi_r02_client']
+                                    
+                                    # Look for a class that might be a client
+                                    for cls in client_classes:
+                                        if any(name in cls.__name__.lower() for name in ['client', 'colmi', 'ring']):
+                                            ColmiClient = cls
+                                            COLMI_CLIENT_AVAILABLE = True
+                                            logger.info(f"Found potential client class: {cls.__name__}")
+                                            break
+                                    else:
+                                        COLMI_CLIENT_AVAILABLE = False
+                                        logger.warning("No suitable client class found in colmi_r02_client")
+                                except Exception as e:
+                                    COLMI_CLIENT_AVAILABLE = False
+                                    logger.warning(f"Error finding client class: {e}")
 except ImportError:
     logger.warning("colmi_r02_client not available, using mock client")
     COLMI_CLIENT_AVAILABLE = False
@@ -454,7 +505,11 @@ class RingManager:
             
             # Use real client
             logger.info(f"Using real ColmiClient for {ring_name} ({mac_address})")
-            client = ColmiClient(mac_address)
+            try:
+                client = ColmiClient(mac_address)
+            except Exception as e:
+                logger.error(f"Error creating ColmiClient: {e}")
+                return False
             
             # Connect
             connected = False
@@ -494,7 +549,11 @@ class RingManager:
         try:
             # Create client
             if COLMI_CLIENT_AVAILABLE:
-                client = ColmiClient(mac_address)
+                try:
+                    client = ColmiClient(mac_address)
+                except Exception as e:
+                    logger.error(f"Error creating ColmiClient: {e}")
+                    client = MockColmiR02Client(mac_address)
             else:
                 client = MockColmiR02Client(mac_address)
                 
