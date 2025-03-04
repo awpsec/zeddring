@@ -9,6 +9,7 @@ from datetime import datetime
 import json
 import os
 import sqlite3
+from dataclasses import dataclass
 
 # Configure logging
 logging.basicConfig(
@@ -19,8 +20,7 @@ logger = logging.getLogger("zeddring.ring_manager")
 
 # Try to import the colmi_r02_client package
 try:
-    from colmi_r02_client import Client
-    from colmi_r02_client.client import Client as ColmiClient
+    from colmi_r02_client import Client as ColmiClient
     COLMI_CLIENT_AVAILABLE = True
 except ImportError:
     logger.warning("colmi_r02_client not available, using mock client")
@@ -28,10 +28,10 @@ except ImportError:
     ColmiClient = None
 
 # Import our custom scanner
-from zeddring.scanner import scan_for_devices
+from zeddring.scanner import scan_for_devices, MockColmiR02Client
 
 # Import database functions
-from zeddring.database import get_db_connection, init_db
+from zeddring.database import Database, get_db_connection
 
 # Import config
 try:
@@ -42,63 +42,6 @@ except ImportError:
     SCAN_TIMEOUT = 10
     MAX_RETRY_ATTEMPTS = 3
     RETRY_DELAY = 300
-
-class MockClient:
-    """Mock client for testing when colmi_r02_client is not available."""
-    
-    def __init__(self, mac_address: str):
-        self.mac_address = mac_address
-        self.connected = False
-        self.battery = 85
-        self.steps = 0
-        self.heart_rate = 70
-        self._last_update = time.time()
-        
-    async def connect(self):
-        """Connect to the device."""
-        logger.info(f"Mock connecting to {self.mac_address}")
-        self.connected = True
-        return True
-        
-    async def disconnect(self):
-        """Disconnect from the device."""
-        logger.info(f"Mock disconnecting from {self.mac_address}")
-        self.connected = False
-        return True
-        
-    async def get_battery(self):
-        """Get battery level."""
-        # Decrease battery by 1% every hour
-        hours_passed = (time.time() - self._last_update) / 3600
-        self.battery = max(0, self.battery - int(hours_passed))
-        return self.battery
-        
-    async def get_steps(self):
-        """Get step count."""
-        # Increase steps by 100-200 every hour
-        hours_passed = (time.time() - self._last_update) / 3600
-        self.steps += int(100 + 100 * hours_passed)
-        return self.steps
-        
-    async def get_heart_rate(self):
-        """Get heart rate."""
-        # Fluctuate heart rate between 60-80
-        import random
-        self.heart_rate = random.randint(60, 80)
-        return self.heart_rate
-        
-    def get_info(self):
-        """Get device info."""
-        return {
-            "name": "Colmi R02",
-            "mac_address": self.mac_address,
-            "firmware_version": "1.0.0",
-            "hardware_version": "1.0.0"
-        }
-        
-    def is_connected(self):
-        """Check if connected."""
-        return self.connected
 
 class Ring:
     """Represents a smart ring device."""
@@ -138,7 +81,7 @@ class Ring:
                 self.client = ColmiClient(self.mac_address)
                 await self.client.connect()
             else:
-                self.client = MockClient(self.mac_address)
+                self.client = MockColmiR02Client(self.mac_address)
                 await self.client.connect()
                 
             self.connected = True
@@ -233,363 +176,377 @@ class Ring:
             return None
 
 class RingManager:
-    """Manages smart ring devices."""
-    
-    def __init__(self, db_path: Optional[str] = None):
-        self.rings: Dict[int, Ring] = {}
-        self.db_path = db_path
-        self.scan_thread = None
+    """Manager for Colmi R02 rings."""
+
+    def __init__(self, db: Optional[Database] = None):
+        """Initialize the ring manager."""
+        self.db = db or Database()
+        self.clients = {}
         self.running = False
-        self.event_loop = None
-        
-        # Initialize database
-        init_db(db_path)
-        
-        # Load rings from database
-        self._load_rings_from_db()
-        
-    def _load_rings_from_db(self):
-        """Load rings from database."""
-        conn = get_db_connection(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT id, name, mac_address FROM rings")
-        rows = cursor.fetchall()
-        
-        for row in rows:
-            ring_id, name, mac_address = row
-            self.rings[ring_id] = Ring(ring_id, name, mac_address)
-            
-        conn.close()
-        
-    def add_ring(self, name: str, mac_address: str) -> Optional[int]:
-        """Add a new ring."""
-        try:
-            conn = get_db_connection(self.db_path)
-            cursor = conn.cursor()
-            
-            # Check if ring with this MAC address already exists
-            cursor.execute("SELECT id FROM rings WHERE mac_address = ?", (mac_address,))
-            existing = cursor.fetchone()
-            
-            if existing:
-                ring_id = existing[0]
-                # Update name if different
-                cursor.execute("UPDATE rings SET name = ? WHERE id = ?", (name, ring_id))
-                conn.commit()
-            else:
-                # Insert new ring
-                cursor.execute(
-                    "INSERT INTO rings (name, mac_address) VALUES (?, ?)",
-                    (name, mac_address)
-                )
-                conn.commit()
-                ring_id = cursor.lastrowid
-                
-            # Create ring object
-            self.rings[ring_id] = Ring(ring_id, name, mac_address)
-            
-            conn.close()
-            return ring_id
-        except Exception as e:
-            logger.error(f"Error adding ring: {e}")
-            return None
-            
-    def remove_ring(self, ring_id: int) -> bool:
-        """Remove a ring."""
-        try:
-            if ring_id not in self.rings:
-                return False
-                
-            # Disconnect if connected
-            ring = self.rings[ring_id]
-            if ring.connected:
-                asyncio.run(ring.disconnect())
-                
-            # Remove from database
-            conn = get_db_connection(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("DELETE FROM rings WHERE id = ?", (ring_id,))
-            conn.commit()
-            conn.close()
-            
-            # Remove from memory
-            del self.rings[ring_id]
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error removing ring: {e}")
-            return False
-            
-    def get_ring(self, ring_id: int) -> Optional[Ring]:
-        """Get a ring by ID."""
-        return self.rings.get(ring_id)
-        
-    def get_all_rings(self) -> List[Dict[str, Any]]:
-        """Get all rings."""
-        return [ring.to_dict() for ring in self.rings.values()]
-        
-    async def connect_ring(self, ring_id: int) -> bool:
-        """Connect to a ring."""
-        ring = self.get_ring(ring_id)
-        if not ring:
-            return False
-            
-        return await ring.connect()
-        
-    async def disconnect_ring(self, ring_id: int) -> bool:
-        """Disconnect from a ring."""
-        ring = self.get_ring(ring_id)
-        if not ring:
-            return False
-            
-        return await ring.disconnect()
-        
-    async def get_ring_data(self, ring_id: int) -> Optional[Dict[str, Any]]:
-        """Get data from a ring."""
-        ring = self.get_ring(ring_id)
-        if not ring:
-            return None
-            
-        return await ring.update_all()
-        
-    def save_ring_data(self, ring_id: int, data: Dict[str, Any]):
-        """Save ring data to database."""
-        try:
-            if not data:
-                return False
-                
-            conn = get_db_connection(self.db_path)
-            cursor = conn.cursor()
-            
-            timestamp = datetime.now().isoformat()
-            
-            # Insert data
-            cursor.execute(
-                """
-                INSERT INTO ring_data 
-                (ring_id, timestamp, heart_rate, steps, battery) 
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    ring_id, 
-                    timestamp, 
-                    data.get("heart_rate"), 
-                    data.get("steps"), 
-                    data.get("battery")
-                )
-            )
-            
-            conn.commit()
-            conn.close()
-            
-            return True
-        except Exception as e:
-            logger.error(f"Error saving ring data: {e}")
-            return False
-            
-    def get_ring_history(self, ring_id: int, days: int = 7) -> List[Dict[str, Any]]:
-        """Get ring data history."""
-        try:
-            conn = get_db_connection(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute(
-                """
-                SELECT timestamp, heart_rate, steps, battery 
-                FROM ring_data 
-                WHERE ring_id = ? 
-                AND timestamp > datetime('now', '-' || ? || ' days')
-                ORDER BY timestamp ASC
-                """,
-                (ring_id, days)
-            )
-            
-            rows = cursor.fetchall()
-            
-            history = []
-            for row in rows:
-                timestamp, heart_rate, steps, battery = row
-                history.append({
-                    "timestamp": timestamp,
-                    "heart_rate": heart_rate,
-                    "steps": steps,
-                    "battery": battery
-                })
-                
-            conn.close()
-            return history
-        except Exception as e:
-            logger.error(f"Error getting ring history: {e}")
-            return []
-            
-    def get_daily_data(self, ring_id: int, date: Optional[str] = None) -> Dict[str, Any]:
-        """Get daily data for a ring."""
-        try:
-            if not date:
-                date = datetime.now().strftime("%Y-%m-%d")
-                
-            conn = get_db_connection(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get data for the specified date
-            cursor.execute(
-                """
-                SELECT timestamp, heart_rate, steps, battery 
-                FROM ring_data 
-                WHERE ring_id = ? 
-                AND date(timestamp) = date(?)
-                ORDER BY timestamp ASC
-                """,
-                (ring_id, date)
-            )
-            
-            rows = cursor.fetchall()
-            
-            # Process data
-            timestamps = []
-            heart_rates = []
-            steps_data = []
-            battery_levels = []
-            
-            for row in rows:
-                timestamp, heart_rate, steps, battery = row
-                # Convert timestamp to hours:minutes format for display
-                dt = datetime.fromisoformat(timestamp)
-                hour_minute = dt.strftime("%H:%M")
-                
-                timestamps.append(hour_minute)
-                heart_rates.append(heart_rate if heart_rate is not None else 0)
-                steps_data.append(steps if steps is not None else 0)
-                battery_levels.append(battery if battery is not None else 0)
-                
-            # Calculate daily stats
-            avg_heart_rate = sum(heart_rates) / len(heart_rates) if heart_rates else 0
-            max_heart_rate = max(heart_rates) if heart_rates else 0
-            min_heart_rate = min([hr for hr in heart_rates if hr > 0]) if heart_rates else 0
-            last_steps = steps_data[-1] if steps_data else 0
-            last_battery = battery_levels[-1] if battery_levels else 0
-            
-            conn.close()
-            
-            return {
-                "date": date,
-                "timestamps": timestamps,
-                "heart_rates": heart_rates,
-                "steps": steps_data,
-                "battery_levels": battery_levels,
-                "avg_heart_rate": round(avg_heart_rate, 1),
-                "max_heart_rate": max_heart_rate,
-                "min_heart_rate": min_heart_rate,
-                "last_steps": last_steps,
-                "last_battery": last_battery
-            }
-        except Exception as e:
-            logger.error(f"Error getting daily data: {e}")
-            return {
-                "date": date or datetime.now().strftime("%Y-%m-%d"),
-                "timestamps": [],
-                "heart_rates": [],
-                "steps": [],
-                "battery_levels": [],
-                "avg_heart_rate": 0,
-                "max_heart_rate": 0,
-                "min_heart_rate": 0,
-                "last_steps": 0,
-                "last_battery": 0
-            }
-            
-    def _scan_loop(self):
-        """Background thread for scanning for rings."""
-        logger.info("Ring manager started")
-        
-        while self.running:
-            try:
-                logger.info("Scanning for rings...")
-                
-                # Scan for devices
-                try:
-                    devices = scan_for_devices(timeout=10)
-                except Exception as e:
-                    logger.error(f"Error in scan loop: {e}")
-                    time.sleep(10)
-                    continue
-                    
-                # Check if any of the devices match our rings
-                for device in devices:
-                    mac_address = device.get("mac_address")
-                    
-                    # Find ring with this MAC address
-                    for ring_id, ring in self.rings.items():
-                        if ring.mac_address.lower() == mac_address.lower():
-                            # Try to connect if not already connected
-                            if not ring.connected:
-                                logger.info(f"Found ring {ring.name} ({mac_address}), connecting...")
-                                
-                                # Create a new event loop for this thread
-                                loop = asyncio.new_event_loop()
-                                asyncio.set_event_loop(loop)
-                                
-                                # Connect to the ring
-                                success = loop.run_until_complete(ring.connect())
-                                
-                                if success:
-                                    # Get initial data
-                                    data = loop.run_until_complete(ring.update_all())
-                                    
-                                    # Save data to database
-                                    if data:
-                                        self.save_ring_data(ring_id, data)
-                                        
-                                loop.close()
-                
-                # Update data for connected rings
-                for ring_id, ring in self.rings.items():
-                    if ring.connected:
-                        try:
-                            # Create a new event loop for this thread
-                            loop = asyncio.new_event_loop()
-                            asyncio.set_event_loop(loop)
-                            
-                            # Get data
-                            data = loop.run_until_complete(ring.update_all())
-                            
-                            # Save data to database
-                            if data:
-                                self.save_ring_data(ring_id, data)
-                                
-                            loop.close()
-                        except Exception as e:
-                            logger.error(f"Error updating ring {ring.mac_address}: {e}")
-                            
-                # Sleep for a while
-                time.sleep(10)
-            except Exception as e:
-                logger.error(f"Error in scan loop: {e}")
-                time.sleep(10)
-                
-    def start(self):
+        self.scanner_thread = None
+
+    def start(self) -> None:
         """Start the ring manager."""
         if self.running:
             return
             
         self.running = True
-        self.scan_thread = threading.Thread(target=self._scan_loop)
-        self.scan_thread.daemon = True
-        self.scan_thread.start()
+        self.scanner_thread = threading.Thread(target=self._scanner_loop, daemon=True)
+        self.scanner_thread.start()
         
-    def stop(self):
+        logger.info("Ring manager started")
+
+    def stop(self) -> None:
         """Stop the ring manager."""
         self.running = False
-        
-        if self.scan_thread:
-            self.scan_thread.join(timeout=2)
+        logger.info("Ring manager stopped")
+
+    def _scanner_loop(self) -> None:
+        """Continuously scan for and connect to rings."""
+        while self.running:
+            try:
+                # Scan for devices
+                logger.info("Scanning for devices...")
+                devices = scan_for_devices(timeout=10)
+                logger.info(f"Found {len(devices)} devices")
+                
+                # Process found devices
+                for device in devices:
+                    if not self.running:
+                        break
+                        
+                    try:
+                        # Check if this is a ring we're interested in
+                        if "Colmi" in device.name or "R02" in device.name:
+                            logger.info(f"Found ring: {device.name} ({device.address})")
+                            
+                            # Add to database if not already there
+                            ring = self.db.get_ring_by_mac(device.address)
+                            if not ring:
+                                ring_id = self.db.add_ring(device.name, device.address)
+                                logger.info(f"Added new ring with ID {ring_id}")
+                            else:
+                                ring_id = ring['id']
+                                logger.info(f"Ring already in database with ID {ring_id}")
+                            
+                            # Connect to the ring and get data
+                            self._connect_and_get_data(device.address, ring_id)
+                    except Exception as e:
+                        logger.error(f"Error processing device {device.name}: {e}")
+                
+                # Sleep before next scan
+                time.sleep(60)  # Scan every minute
+                
+            except Exception as e:
+                logger.error(f"Error in scanner loop: {e}")
+                time.sleep(10)  # Short delay before retrying
+
+    def _connect_and_get_data(self, mac_address: str, ring_id: int) -> None:
+        """Connect to a ring and get data."""
+        # Skip if already connected
+        if mac_address in self.clients:
+            logger.info(f"Already connected to {mac_address}")
+            return
             
-        # Disconnect all rings
-        for ring_id, ring in self.rings.items():
-            if ring.connected:
-                asyncio.run(ring.disconnect())
+        try:
+            # Create client
+            if COLMI_CLIENT_AVAILABLE:
+                client = ColmiClient(mac_address)
+            else:
+                client = MockColmiR02Client(mac_address)
+                
+            self.clients[mac_address] = client
+            
+            # Connect
+            logger.info(f"Connecting to {mac_address}...")
+            
+            # For the mock client, we need to handle the async connect differently
+            if COLMI_CLIENT_AVAILABLE:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                connected = loop.run_until_complete(client.connect())
+                loop.close()
+            else:
+                # For mock client, simulate async
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                connected = loop.run_until_complete(client.connect())
+                loop.close()
+                
+            if connected:
+                logger.info(f"Connected to {mac_address}")
+                self.db.update_ring_connection(ring_id)
+                
+                # Get battery
+                try:
+                    if COLMI_CLIENT_AVAILABLE:
+                        battery = client.get_battery()
+                    else:
+                        battery = client.get_battery()
+                    logger.info(f"Battery: {battery}%")
+                    self.db.add_battery(ring_id, battery)
+                except Exception as e:
+                    logger.error(f"Error getting battery: {e}")
+                
+                # Get steps
+                try:
+                    if COLMI_CLIENT_AVAILABLE:
+                        steps = client.get_steps()
+                    else:
+                        steps = client.get_steps()
+                    logger.info(f"Steps: {steps}")
+                    self.db.add_steps(ring_id, steps)
+                except Exception as e:
+                    logger.error(f"Error getting steps: {e}")
+                
+                # Get heart rate
+                try:
+                    if COLMI_CLIENT_AVAILABLE:
+                        heart_rates = client.get_real_time_heart_rate()
+                    else:
+                        heart_rates = client.get_real_time_heart_rate()
+                        
+                    if heart_rates and len(heart_rates) > 0:
+                        # Use the last (most recent) heart rate value
+                        hr_value = heart_rates[-1]
+                        if hr_value > 0:  # Ignore zero values
+                            logger.info(f"Heart rate: {hr_value}")
+                            self.db.add_heart_rate(ring_id, hr_value)
+                except Exception as e:
+                    logger.error(f"Error getting heart rate: {e}")
+                
+                # Disconnect
+                logger.info(f"Disconnecting from {mac_address}...")
+                if COLMI_CLIENT_AVAILABLE:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(client.disconnect())
+                    loop.close()
+                else:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(client.disconnect())
+                    loop.close()
+                
+                logger.info(f"Disconnected from {mac_address}")
+            else:
+                logger.error(f"Failed to connect to {mac_address}")
+                
+        except Exception as e:
+            logger.error(f"Error connecting to {mac_address}: {e}")
+        finally:
+            # Clean up
+            if mac_address in self.clients:
+                del self.clients[mac_address]
+
+    def get_ring_status(self) -> List[Dict]:
+        """Get status of all rings."""
+        rings = self.db.get_rings()
+        result = []
+        
+        for ring in rings:
+            # Convert to dict for easier manipulation
+            ring_dict = dict(ring)
+            
+            # Add connected status
+            ring_dict['connected'] = ring['mac_address'] in self.clients
+            
+            # Get latest data
+            try:
+                heart_rate_data = self.db.get_heart_rate_data(ring['id'], limit=1)
+                if heart_rate_data:
+                    ring_dict['heart_rate'] = heart_rate_data[0]['value']
+                    ring_dict['heart_rate_time'] = heart_rate_data[0]['timestamp']
+                
+                steps_data = self.db.get_steps_data(ring['id'], limit=1)
+                if steps_data:
+                    ring_dict['steps'] = steps_data[0]['value']
+                    ring_dict['steps_time'] = steps_data[0]['timestamp']
+                
+                battery_data = self.db.get_battery_data(ring['id'], limit=1)
+                if battery_data:
+                    ring_dict['battery'] = battery_data[0]['value']
+                    ring_dict['battery_time'] = battery_data[0]['timestamp']
+            except Exception as e:
+                logger.error(f"Error getting data for ring {ring['id']}: {e}")
+            
+            result.append(ring_dict)
+        
+        return result
+
+    def get_ring_data(self, ring_id: int) -> Dict:
+        """Get detailed data for a specific ring."""
+        ring = self.db.get_ring(ring_id)
+        if not ring:
+            return {}
+            
+        # Convert to dict for easier manipulation
+        result = dict(ring)
+        
+        # Add connected status
+        result['connected'] = ring['mac_address'] in self.clients
+        
+        # Get data
+        try:
+            # Get heart rate data
+            heart_rate_data = self.db.get_heart_rate_data(ring_id, limit=100)
+            result['heart_rate_data'] = [
+                {'value': row['value'], 'timestamp': row['timestamp']}
+                for row in heart_rate_data
+            ]
+            
+            # Calculate min, max, avg heart rate
+            if heart_rate_data:
+                hr_values = [row['value'] for row in heart_rate_data]
+                result['min_heart_rate'] = min(hr_values)
+                result['max_heart_rate'] = max(hr_values)
+                result['avg_heart_rate'] = sum(hr_values) / len(hr_values)
+                result['latest_heart_rate'] = heart_rate_data[0]['value']
+            
+            # Get steps data
+            steps_data = self.db.get_steps_data(ring_id, limit=100)
+            result['steps_data'] = [
+                {'value': row['value'], 'timestamp': row['timestamp']}
+                for row in steps_data
+            ]
+            
+            # Get latest steps
+            if steps_data:
+                result['latest_steps'] = steps_data[0]['value']
+            
+            # Get battery data
+            battery_data = self.db.get_battery_data(ring_id, limit=100)
+            result['battery_data'] = [
+                {'value': row['value'], 'timestamp': row['timestamp']}
+                for row in battery_data
+            ]
+            
+            # Get latest battery
+            if battery_data:
+                result['latest_battery'] = battery_data[0]['value']
+                
+        except Exception as e:
+            logger.error(f"Error getting data for ring {ring_id}: {e}")
+        
+        return result
+        
+    def remove_ring(self, ring_id: int) -> bool:
+        """Remove a ring from the database."""
+        try:
+            ring = self.db.get_ring(ring_id)
+            if not ring:
+                return False
+                
+            # Disconnect if connected
+            if ring['mac_address'] in self.clients:
+                try:
+                    client = self.clients[ring['mac_address']]
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(client.disconnect())
+                    loop.close()
+                    del self.clients[ring['mac_address']]
+                except Exception as e:
+                    logger.error(f"Error disconnecting from ring {ring_id}: {e}")
+            
+            # Remove from database
+            # This would need to be implemented in the Database class
+            # self.db.remove_ring(ring_id)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error removing ring {ring_id}: {e}")
+            return False
+            
+    async def connect_ring(self, ring_id: int) -> bool:
+        """Connect to a ring."""
+        try:
+            ring = self.db.get_ring(ring_id)
+            if not ring:
+                return False
+                
+            # Skip if already connected
+            if ring['mac_address'] in self.clients:
+                return True
+                
+            # Create client
+            if COLMI_CLIENT_AVAILABLE:
+                client = ColmiClient(ring['mac_address'])
+            else:
+                client = MockColmiR02Client(ring['mac_address'])
+                
+            # Connect
+            connected = await client.connect()
+            
+            if connected:
+                self.clients[ring['mac_address']] = client
+                self.db.update_ring_connection(ring_id)
+                return True
+            else:
+                return False
+        except Exception as e:
+            logger.error(f"Error connecting to ring {ring_id}: {e}")
+            return False
+            
+    async def disconnect_ring(self, ring_id: int) -> bool:
+        """Disconnect from a ring."""
+        try:
+            ring = self.db.get_ring(ring_id)
+            if not ring:
+                return False
+                
+            # Skip if not connected
+            if ring['mac_address'] not in self.clients:
+                return True
+                
+            # Disconnect
+            client = self.clients[ring['mac_address']]
+            await client.disconnect()
+            
+            # Remove from clients
+            del self.clients[ring['mac_address']]
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error disconnecting from ring {ring_id}: {e}")
+            return False
+            
+    def get_ring_history(self, ring_id: int, days: int = 7) -> Dict:
+        """Get ring data history."""
+        try:
+            # This would need to be implemented in the Database class
+            # return self.db.get_ring_history(ring_id, days)
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting ring history for {ring_id}: {e}")
+            return {}
+            
+    def get_daily_data(self, ring_id: int, date: Optional[str] = None) -> Dict:
+        """Get daily data for a ring."""
+        try:
+            # This would need to be implemented in the Database class
+            # return self.db.get_daily_data(ring_id, date)
+            return {}
+        except Exception as e:
+            logger.error(f"Error getting daily data for {ring_id}: {e}")
+            return {}
+            
+    def save_ring_data(self, ring_id: int, data: Dict) -> bool:
+        """Save ring data to database."""
+        try:
+            if 'heart_rate' in data and data['heart_rate']:
+                self.db.add_heart_rate(ring_id, data['heart_rate'])
+                
+            if 'steps' in data and data['steps']:
+                self.db.add_steps(ring_id, data['steps'])
+                
+            if 'battery' in data and data['battery']:
+                self.db.add_battery(ring_id, data['battery'])
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error saving ring data for {ring_id}: {e}")
+            return False
 
 # Singleton instance
 _instance = None
@@ -599,6 +556,10 @@ def get_ring_manager(db_path: Optional[str] = None) -> RingManager:
     global _instance
     
     if _instance is None:
-        _instance = RingManager(db_path)
+        if db_path:
+            db = Database()
+            _instance = RingManager(db)
+        else:
+            _instance = RingManager()
         
     return _instance 

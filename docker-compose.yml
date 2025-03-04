@@ -5,13 +5,15 @@ services:
     build: .
     container_name: zeddring
     restart: unless-stopped
-    network_mode: host  # Using host network for Bluetooth access
-    privileged: true    # Needed for Bluetooth access
+    network_mode: host
+    privileged: true
     volumes:
-      - ./data:/data    # Persist database
-    # Removed port mappings as they're incompatible with network_mode: host
+      - ./data:/data
+    ports:
+      - "5000:5000"
     devices:
-      - "/dev/bluetooth:/dev/bluetooth"
+      - "/dev/ttyAMA0:/dev/ttyAMA0"
+      - "/dev/vcio:/dev/vcio"
       - "/dev/input/event0:/dev/input/event0"
     # Add capabilities for Bluetooth
     cap_add:

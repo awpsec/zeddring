@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Error - Zeddring</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Zeddring</h1>
+        <nav>
+            <a href="{{ url_for('index') }}" class="button">Back to Dashboard</a>
+        </nav>
+    </header>
+    
+    <main>
+        <section class="error-page">
+            <div class="error-code">500</div>
+            <h2 class="error-message">Server Error</h2>
+            <p>Something went wrong on our end. Please try again later.</p>
+            <div class="error-actions">
+                <a href="{{ url_for('index') }}" class="button primary">Go to Dashboard</a>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>&copy; 2025 Zeddring</p>
+    </footer>
+</body>
+</html> 

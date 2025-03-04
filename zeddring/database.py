@@ -4,82 +4,248 @@ import sqlite3
 import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
+import os
+import logging
 
 from zeddring.config import DATABASE_PATH
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("zeddring.database")
+
+# Get database path from environment variable or use default
+DB_PATH = os.environ.get('ZEDDRING_DB_PATH', 'zeddring_data.sqlite')
+
+def get_db_connection():
+    """Get a connection to the SQLite database."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initialize the database with required tables."""
+    logger.info(f"Initializing database at {DB_PATH}")
+    
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # Create rings table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS rings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        mac_address TEXT UNIQUE NOT NULL,
+        last_connected TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    ''')
+    
+    # Create heart_rate table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS heart_rate (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ring_id INTEGER NOT NULL,
+        value INTEGER NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ring_id) REFERENCES rings (id)
+    )
+    ''')
+    
+    # Create steps table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ring_id INTEGER NOT NULL,
+        value INTEGER NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ring_id) REFERENCES rings (id)
+    )
+    ''')
+    
+    # Create battery table
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS battery (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ring_id INTEGER NOT NULL,
+        value INTEGER NOT NULL,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (ring_id) REFERENCES rings (id)
+    )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    
+    logger.info("Database initialized successfully")
 
 class Database:
-    """Database handler for Zeddring."""
-
-    def __init__(self, db_path: str = DATABASE_PATH):
+    """Database class for interacting with the SQLite database."""
+    
+    def __init__(self):
         """Initialize the database."""
-        self.db_path = db_path
-        self._initialize_db()
-
-    def _initialize_db(self) -> None:
-        """Create database tables if they don't exist."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Create rings table
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS rings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mac_address TEXT UNIQUE NOT NULL,
-                name TEXT,
-                last_seen TIMESTAMP,
-                battery_level INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-            ''')
-            
-            # Create heart_rate table
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS heart_rate (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ring_id INTEGER,
-                timestamp TIMESTAMP NOT NULL,
-                value INTEGER NOT NULL,
-                FOREIGN KEY (ring_id) REFERENCES rings (id)
-            )
-            ''')
-            
-            # Create steps table
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS steps (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ring_id INTEGER,
-                timestamp TIMESTAMP NOT NULL,
-                value INTEGER NOT NULL,
-                FOREIGN KEY (ring_id) REFERENCES rings (id)
-            )
-            ''')
-            
-            # Create spo2 table
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS spo2 (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ring_id INTEGER,
-                timestamp TIMESTAMP NOT NULL,
-                value INTEGER NOT NULL,
-                FOREIGN KEY (ring_id) REFERENCES rings (id)
-            )
-            ''')
-            
-            conn.commit()
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """Get a database connection."""
-        # Ensure the directory exists
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        init_db()
+    
+    def add_ring(self, name, mac_address):
+        """Add a new ring to the database."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            cursor.execute(
+                "INSERT INTO rings (name, mac_address) VALUES (?, ?)",
+                (name, mac_address)
+            )
+            conn.commit()
+            ring_id = cursor.lastrowid
+            logger.info(f"Added new ring: {name} ({mac_address})")
+            return ring_id
+        except sqlite3.IntegrityError:
+            # Ring with this MAC address already exists
+            cursor.execute(
+                "SELECT id FROM rings WHERE mac_address = ?",
+                (mac_address,)
+            )
+            ring_id = cursor.fetchone()[0]
+            logger.info(f"Ring with MAC {mac_address} already exists with ID {ring_id}")
+            return ring_id
+        finally:
+            conn.close()
+    
+    def update_ring_connection(self, ring_id):
+        """Update the last_connected timestamp for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "UPDATE rings SET last_connected = ? WHERE id = ?",
+            (datetime.datetime.now(), ring_id)
+        )
+        conn.commit()
+        conn.close()
+    
+    def get_rings(self):
+        """Get all rings from the database."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM rings ORDER BY name")
+        rings = cursor.fetchall()
+        
+        conn.close()
+        return rings
+    
+    def get_ring(self, ring_id):
+        """Get a specific ring by ID."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM rings WHERE id = ?", (ring_id,))
+        ring = cursor.fetchone()
+        
+        conn.close()
+        return ring
+    
+    def get_ring_by_mac(self, mac_address):
+        """Get a ring by MAC address."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM rings WHERE mac_address = ?", (mac_address,))
+        ring = cursor.fetchone()
+        
+        conn.close()
+        return ring
+    
+    def add_heart_rate(self, ring_id, value):
+        """Add a heart rate reading for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO heart_rate (ring_id, value) VALUES (?, ?)",
+            (ring_id, value)
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"Added heart rate {value} for ring {ring_id}")
+    
+    def add_steps(self, ring_id, value):
+        """Add a steps reading for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO steps (ring_id, value) VALUES (?, ?)",
+            (ring_id, value)
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"Added steps {value} for ring {ring_id}")
+    
+    def add_battery(self, ring_id, value):
+        """Add a battery reading for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "INSERT INTO battery (ring_id, value) VALUES (?, ?)",
+            (ring_id, value)
+        )
+        conn.commit()
+        conn.close()
+        logger.debug(f"Added battery {value}% for ring {ring_id}")
+    
+    def get_heart_rate_data(self, ring_id, limit=100):
+        """Get heart rate data for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT value, timestamp FROM heart_rate WHERE ring_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (ring_id, limit)
+        )
+        data = cursor.fetchall()
+        
+        conn.close()
+        return data
+    
+    def get_steps_data(self, ring_id, limit=100):
+        """Get steps data for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT value, timestamp FROM steps WHERE ring_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (ring_id, limit)
+        )
+        data = cursor.fetchall()
+        
+        conn.close()
+        return data
+    
+    def get_battery_data(self, ring_id, limit=100):
+        """Get battery data for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            "SELECT value, timestamp FROM battery WHERE ring_id = ? ORDER BY timestamp DESC LIMIT ?",
+            (ring_id, limit)
+        )
+        data = cursor.fetchall()
+        
+        conn.close()
+        return data
 
     def add_or_update_ring(self, mac_address: str, name: Optional[str] = None) -> int:
         """Add a new ring or update an existing one."""
-        with self._get_connection() as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             
             # Check if ring exists
@@ -90,165 +256,37 @@ class Database:
                 # Update existing ring
                 if name:
                     cursor.execute(
-                        "UPDATE rings SET name = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?",
+                        "UPDATE rings SET name = ?, last_connected = CURRENT_TIMESTAMP WHERE id = ?",
                         (name, result['id'])
                     )
                 else:
                     cursor.execute(
-                        "UPDATE rings SET last_seen = CURRENT_TIMESTAMP WHERE id = ?",
+                        "UPDATE rings SET last_connected = CURRENT_TIMESTAMP WHERE id = ?",
                         (result['id'],)
                     )
                 return result['id']
             else:
                 # Add new ring
                 cursor.execute(
-                    "INSERT INTO rings (mac_address, name, last_seen) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                    "INSERT INTO rings (mac_address, name, last_connected) VALUES (?, ?, CURRENT_TIMESTAMP)",
                     (mac_address, name)
                 )
                 return cursor.lastrowid
 
     def update_ring_battery(self, ring_id: int, battery_level: int) -> None:
         """Update the battery level for a ring."""
-        with self._get_connection() as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE rings SET battery_level = ?, last_seen = CURRENT_TIMESTAMP WHERE id = ?",
+                "UPDATE rings SET battery_level = ?, last_connected = CURRENT_TIMESTAMP WHERE id = ?",
                 (battery_level, ring_id)
             )
-
-    def get_rings(self) -> List[Dict[str, Any]]:
-        """Get all registered rings."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM rings ORDER BY last_seen DESC")
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_ring_by_mac(self, mac_address: str) -> Optional[Dict[str, Any]]:
-        """Get a ring by MAC address."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM rings WHERE mac_address = ?", (mac_address,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    def get_ring_by_id(self, ring_id: int) -> Optional[Dict[str, Any]]:
-        """Get a ring by ID."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM rings WHERE id = ?", (ring_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-
-    def update_ring_name(self, ring_id: int, name: str) -> None:
-        """Update the name of a ring."""
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE rings SET name = ? WHERE id = ?", (name, ring_id))
-
-    def add_heart_rate(self, ring_id: int, value: int, timestamp: Optional[datetime.datetime] = None) -> None:
-        """Add a heart rate measurement."""
-        if timestamp is None:
-            timestamp = datetime.datetime.now()
-            
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO heart_rate (ring_id, timestamp, value) VALUES (?, ?, ?)",
-                (ring_id, timestamp, value)
-            )
-
-    def add_steps(self, ring_id: int, value: int, timestamp: Optional[datetime.datetime] = None) -> None:
-        """Add a steps measurement."""
-        if timestamp is None:
-            timestamp = datetime.datetime.now()
-            
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO steps (ring_id, timestamp, value) VALUES (?, ?, ?)",
-                (ring_id, timestamp, value)
-            )
-
-    def add_spo2(self, ring_id: int, value: int, timestamp: Optional[datetime.datetime] = None) -> None:
-        """Add an SPO2 measurement."""
-        if timestamp is None:
-            timestamp = datetime.datetime.now()
-            
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO spo2 (ring_id, timestamp, value) VALUES (?, ?, ?)",
-                (ring_id, timestamp, value)
-            )
-
-    def get_heart_rate_data(self, ring_id: int, start_time: Optional[datetime.datetime] = None, 
-                           end_time: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
-        """Get heart rate data for a specific ring within a time range."""
-        query = "SELECT * FROM heart_rate WHERE ring_id = ?"
-        params = [ring_id]
-        
-        if start_time:
-            query += " AND timestamp >= ?"
-            params.append(start_time)
-        
-        if end_time:
-            query += " AND timestamp <= ?"
-            params.append(end_time)
-            
-        query += " ORDER BY timestamp DESC"
-        
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_steps_data(self, ring_id: int, start_time: Optional[datetime.datetime] = None, 
-                      end_time: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
-        """Get steps data for a specific ring within a time range."""
-        query = "SELECT * FROM steps WHERE ring_id = ?"
-        params = [ring_id]
-        
-        if start_time:
-            query += " AND timestamp >= ?"
-            params.append(start_time)
-        
-        if end_time:
-            query += " AND timestamp <= ?"
-            params.append(end_time)
-            
-        query += " ORDER BY timestamp DESC"
-        
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_spo2_data(self, ring_id: int, start_time: Optional[datetime.datetime] = None, 
-                     end_time: Optional[datetime.datetime] = None) -> List[Dict[str, Any]]:
-        """Get SPO2 data for a specific ring within a time range."""
-        query = "SELECT * FROM spo2 WHERE ring_id = ?"
-        params = [ring_id]
-        
-        if start_time:
-            query += " AND timestamp >= ?"
-            params.append(start_time)
-        
-        if end_time:
-            query += " AND timestamp <= ?"
-            params.append(end_time)
-            
-        query += " ORDER BY timestamp DESC"
-        
-        with self._get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, params)
-            return [dict(row) for row in cursor.fetchall()]
 
     def get_daily_heart_rate_stats(self, ring_id: int, days: int = 30) -> List[Dict[str, Any]]:
         """Get daily heart rate statistics for the last N days."""
         start_date = datetime.datetime.now() - datetime.timedelta(days=days)
         
-        with self._get_connection() as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT 
@@ -269,7 +307,7 @@ class Database:
         """Get daily steps statistics for the last N days."""
         start_date = datetime.datetime.now() - datetime.timedelta(days=days)
         
-        with self._get_connection() as conn:
+        with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT 

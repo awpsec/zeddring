@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add New Ring - Zeddring</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>Add New Ring</h1>
+        <nav>
+            <a href="{{ url_for('index') }}" class="button">Back to Dashboard</a>
+        </nav>
+    </header>
+    
+    <main>
+        <section class="form-section">
+            <div class="form-card">
+                <h2>Ring Details</h2>
+                <form action="{{ url_for('add_ring') }}" method="post">
+                    <div class="form-group">
+                        <label for="name">Ring Name</label>
+                        <input type="text" id="name" name="name" required placeholder="My Colmi R02">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="mac_address">MAC Address</label>
+                        <input type="text" id="mac_address" name="mac_address" required placeholder="XX:XX:XX:XX:XX:XX">
+                        <p class="form-help">The MAC address of your Colmi R02 ring (e.g., 87:89:99:BC:B4:D5)</p>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="button primary">Add Ring</button>
+                        <a href="{{ url_for('index') }}" class="button">Cancel</a>
+                    </div>
+                </form>
+            </div>
+            
+            <div class="info-card">
+                <h3>How to Find Your Ring's MAC Address</h3>
+                <p>To find your Colmi R02 ring's MAC address:</p>
+                <ol>
+                    <li>Make sure your ring is powered on and Bluetooth is enabled on your device</li>
+                    <li>Use a Bluetooth scanner app on your phone or run a Bluetooth scan on your computer</li>
+                    <li>Look for a device named "Colmi R02" or similar</li>
+                    <li>The MAC address will be displayed as a series of hexadecimal numbers separated by colons (e.g., 87:89:99:BC:B4:D5)</li>
+                </ol>
+                <p>If you're having trouble finding your ring, try bringing it closer to your device and ensuring it has sufficient battery.</p>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <p>&copy; 2025 Zeddring</p>
+    </footer>
+</body>
+</html> 

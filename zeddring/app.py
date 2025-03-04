@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Main application for Zeddring."""
+"""Main application module for Zeddring."""
 
-import argparse
+import os
 import logging
-import signal
-import sys
+import threading
 import time
-
-from zeddring.config import WEB_HOST, WEB_PORT, DEBUG
-from zeddring.database import Database
-from zeddring.ring_manager import RingManager
-from zeddring.hr_logger import HeartRateLogger
-from zeddring.web import app
+import sys
 
 # Configure logging
 logging.basicConfig(
@@ -20,55 +14,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zeddring.app")
 
-
-def signal_handler(sig, frame):
-    """Handle signals to gracefully shut down."""
-    logger.info("Shutting down Zeddring...")
-    sys.exit(0)
-
+# Import components
+try:
+    from zeddring.database import Database, init_db
+    from zeddring.ring_manager import RingManager, get_ring_manager
+    from zeddring.hr_logger import HeartRateLogger
+    from zeddring.web import app as web_app
+    from zeddring.config import WEB_HOST, WEB_PORT, DEBUG
+except ImportError as e:
+    logger.error(f"Error importing components: {e}")
+    sys.exit(1)
 
 def main():
-    """Run the main application."""
-    parser = argparse.ArgumentParser(description='Zeddring - Colmi R02 Ring Manager')
-    parser.add_argument('--no-web', action='store_true', help='Disable web interface')
-    parser.add_argument('--host', type=str, default=WEB_HOST, help='Web server host')
-    parser.add_argument('--port', type=int, default=WEB_PORT, help='Web server port')
-    parser.add_argument('--debug', action='store_true', default=DEBUG, help='Enable debug mode')
-    
-    args = parser.parse_args()
-    
-    # Set up signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Initialize components
-    db = Database()
-    ring_manager = RingManager(db)
-    hr_logger = HeartRateLogger(db, ring_manager)
-    
-    # Start the ring manager and heart rate logger
-    ring_manager.start()
-    hr_logger.start()
-    
-    logger.info("Zeddring started")
-    
-    if not args.no_web:
-        # Start the web server
-        logger.info(f"Starting web server on {args.host}:{args.port}")
-        app.run(host=args.host, port=args.port, debug=args.debug)
-    else:
-        # Just keep the main thread alive
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            pass
-    
-    # Clean up
-    ring_manager.stop()
-    hr_logger.stop()
-    logger.info("Zeddring stopped")
+    """Main entry point for the application."""
+    try:
+        # Initialize database
+        logger.info("Initializing database...")
+        init_db()
+        db = Database()
+        
+        # Initialize ring manager
+        logger.info("Initializing ring manager...")
+        ring_manager = get_ring_manager()
+        ring_manager.start()
+        
+        # Initialize heart rate logger
+        logger.info("Initializing heart rate logger...")
+        hr_logger = HeartRateLogger(db, ring_manager)
+        hr_logger.start()
+        
+        # Get configuration from environment
+        host = WEB_HOST
+        port = WEB_PORT
+        debug = DEBUG
+        
+        # Start web server
+        logger.info(f"Starting web server on {host}:{port} (debug={debug})...")
+        web_app.config['RING_MANAGER'] = ring_manager
+        web_app.config['DATABASE'] = db
+        web_app.run(host=host, port=port, debug=debug)
+        
+    except Exception as e:
+        logger.error(f"Error starting application: {e}")
+        sys.exit(1)
+    finally:
+        # Clean up
+        if 'ring_manager' in locals():
+            ring_manager.stop()
+        if 'hr_logger' in locals():
+            hr_logger.stop()
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main() 
