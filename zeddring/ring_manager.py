@@ -237,6 +237,8 @@ class RingManager:
         self.running = False
         self.scanner_thread = None
         self.data_thread = None
+        self.connected_rings = {}
+        self.lock = threading.Lock()
 
     def start(self) -> None:
         """Start the ring manager."""
@@ -398,51 +400,144 @@ class RingManager:
                 logger.info(f"Already connected to {mac_address}")
                 return True
                 
+            # Get ring info from database to check if it's marked as mock
+            ring_info = self.db.get_ring(ring_id)
+            if not ring_info:
+                logger.error(f"Ring {ring_id} not found in database")
+                return False
+            
+            is_mock_in_db = ring_info.get('is_mock', 0) == 1
+            ring_name = ring_info.get('name', 'Unknown Ring')
+            
             # Create client
-            if COLMI_CLIENT_AVAILABLE:
-                logger.info(f"Using real ColmiClient for {mac_address}")
+            # For manually added rings (not the default mock), always try to use the real client
+            is_mock_default = mac_address == "00:11:22:33:44:55"
+            
+            if COLMI_CLIENT_AVAILABLE and not is_mock_default and not is_mock_in_db:
+                logger.info(f"Using real ColmiClient for {ring_name} ({mac_address})")
                 client = ColmiClient(mac_address)
             else:
-                logger.warning(f"ColmiClient not available, using MockColmiR02Client for {mac_address}")
+                if is_mock_default:
+                    logger.info(f"Using MockColmiR02Client for default mock ring {mac_address}")
+                elif is_mock_in_db:
+                    logger.info(f"Using MockColmiR02Client for ring marked as mock in database: {ring_name} ({mac_address})")
+                else:
+                    logger.warning(f"ColmiClient not available, using MockColmiR02Client for {ring_name} ({mac_address})")
+                client = MockColmiR02Client(mac_address)
+            
+            # Connect
+            logger.info(f"Connecting to {ring_name} ({mac_address})...")
+            
+            # Try to connect with retry logic
+            retry_count = 0
+            connected = False
+            
+            while retry_count < MAX_RETRY_ATTEMPTS and not connected:
+                # Handle the async connect
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    connected = loop.run_until_complete(client.connect())
+                    if connected:
+                        logger.info(f"Successfully connected to {ring_name} ({mac_address}) on attempt {retry_count + 1}")
+                    else:
+                        retry_count += 1
+                        logger.warning(f"Failed to connect on attempt {retry_count}, will retry in {RETRY_DELAY} seconds")
+                        time.sleep(RETRY_DELAY)
+                except Exception as e:
+                    retry_count += 1
+                    logger.error(f"Error during connect attempt {retry_count}: {e}")
+                    if retry_count < MAX_RETRY_ATTEMPTS:
+                        logger.warning(f"Will retry in {RETRY_DELAY} seconds")
+                        time.sleep(RETRY_DELAY)
+            
+            # If we couldn't connect with a real client, fall back to mock
+            if not connected and COLMI_CLIENT_AVAILABLE and not is_mock_default and not is_mock_in_db:
+                logger.warning(f"Failed to connect with real client, falling back to mock for {ring_name} ({mac_address})")
                 client = MockColmiR02Client(mac_address)
                 
-            # Connect
-            logger.info(f"Connecting to {mac_address}...")
+                # Try to connect with mock client
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    connected = loop.run_until_complete(client.connect())
+                    if connected:
+                        logger.info(f"Successfully connected with mock client for {ring_name} ({mac_address})")
+                        # Update database to mark this ring as mock
+                        self.db.update_ring(ring_id, {'is_mock': 1})
+                        logger.info(f"Updated database to mark {ring_name} ({mac_address}) as mock")
+                except Exception as e:
+                    logger.error(f"Error connecting with mock client: {e}")
+                    connected = False
+                finally:
+                    loop.close()
             
-            # Handle the async connect
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                connected = loop.run_until_complete(client.connect())
-            except Exception as e:
-                logger.error(f"Error during connect: {e}")
-                connected = False
-            finally:
-                loop.close()
-                
             if connected:
-                logger.info(f"Connected to {mac_address}")
+                logger.info(f"Connected to {ring_name} ({mac_address})")
                 self.clients[mac_address] = client
+                self.connected_rings[mac_address] = True
                 self.db.update_ring_connection(ring_id)
                 
-                # Try to sync historical data after connecting
-                try:
-                    logger.info(f"Syncing historical data for ring {ring_id}")
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(client.get_historical_data())
-                    loop.close()
-                    logger.info(f"Historical data sync completed for ring {ring_id}")
-                except Exception as e:
-                    logger.error(f"Error syncing historical data: {e}")
+                # Try to sync historical data after connecting if this is a real ring
+                if not is_mock_default and not is_mock_in_db and COLMI_CLIENT_AVAILABLE:
+                    try:
+                        logger.info(f"Syncing historical data for ring {ring_name} ({mac_address})")
+                        
+                        # Get last sync time
+                        last_sync = ring_info.get('last_sync')
+                        if last_sync:
+                            try:
+                                last_sync = datetime.fromisoformat(last_sync)
+                                logger.info(f"Last sync for {ring_name} was at {last_sync}")
+                            except ValueError:
+                                last_sync = datetime.now() - datetime.timedelta(days=7)
+                                logger.warning(f"Invalid last_sync format for {ring_name}, using 7 days ago")
+                        else:
+                            last_sync = datetime.now() - datetime.timedelta(days=7)
+                            logger.info(f"No previous sync for {ring_name}, using 7 days ago")
+                        
+                        # Get historical data
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        historical_data = loop.run_until_complete(client.get_historical_data(since=last_sync))
+                        loop.close()
+                        
+                        if historical_data and 'steps_history' in historical_data:
+                            for entry in historical_data['steps_history']:
+                                timestamp = entry.get('timestamp')
+                                steps = entry.get('value')
+                                if timestamp and steps:
+                                    # Convert timestamp to datetime if needed
+                                    if isinstance(timestamp, str):
+                                        timestamp = datetime.fromisoformat(timestamp)
+                                    # Add to database with specific timestamp
+                                    self.db.add_steps_with_timestamp(ring_id, steps, timestamp)
+                                    
+                        if historical_data and 'heart_rate_history' in historical_data:
+                            for entry in historical_data['heart_rate_history']:
+                                timestamp = entry.get('timestamp')
+                                heart_rate = entry.get('value')
+                                if timestamp and heart_rate:
+                                    # Convert timestamp to datetime if needed
+                                    if isinstance(timestamp, str):
+                                        timestamp = datetime.fromisoformat(timestamp)
+                                    # Add to database with specific timestamp
+                                    self.db.add_heart_rate_with_timestamp(ring_id, heart_rate, timestamp)
+                        
+                        # Update last sync time
+                        now = datetime.now()
+                        self.db.update_ring(ring_id, {'last_sync': now.isoformat()})
+                        logger.info(f"Historical data sync completed for ring {ring_name} and updated last_sync to {now}")
+                    except Exception as e:
+                        logger.error(f"Error syncing historical data: {e}")
                     
                 return True
             else:
-                logger.error(f"Failed to connect to {mac_address}")
+                logger.error(f"Failed to connect to {ring_name} ({mac_address}) after all attempts")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error connecting to {mac_address}: {e}")
+            logger.error(f"Error in _connect_to_ring for {mac_address}: {e}")
             return False
 
     def _connect_and_get_data(self, mac_address: str, ring_id: int) -> None:

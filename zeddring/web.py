@@ -7,7 +7,7 @@ import datetime
 import asyncio
 import json
 
-from flask import Flask, render_template, request, jsonify, redirect, url_for, abort, current_app
+from flask import Flask, render_template, request, jsonify, redirect, url_for, abort, current_app, flash, session
 from flask_cors import CORS
 
 from zeddring.config import WEB_HOST, WEB_PORT, DEBUG
@@ -26,6 +26,9 @@ app = Flask(__name__,
             template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
             static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 CORS(app)
+
+# Set a secret key for session and flash messages
+app.secret_key = os.environ.get('ZEDDRING_SECRET_KEY', 'zeddring-secret-key')
 
 # Initialize database and ring manager
 db = Database()
@@ -116,27 +119,53 @@ def remove_ring(ring_id):
         "error": "Failed to remove ring" if not success else None
     })
 
-@app.route('/api/ring/<int:ring_id>/connect', methods=['POST'])
+@app.route('/connect_ring/<int:ring_id>', methods=['GET', 'POST'])
 def connect_ring(ring_id):
     """Connect to a ring."""
-    ring_manager = current_app.config.get('RING_MANAGER')
+    logger.info(f"Connecting to ring {ring_id}")
+    
+    # Get ring manager from app config
+    ring_manager = app.config.get('RING_MANAGER')
     if not ring_manager:
-        return jsonify({"error": "Ring manager not available"}), 500
+        flash("Ring manager not available", "error")
+        return redirect(url_for('index'))
+    
+    # Get database from app config
+    db = app.config.get('DB')
+    if not db:
+        flash("Database not available", "error")
+        return redirect(url_for('index'))
+    
+    # Check if ring exists
+    ring = db.get_ring(ring_id)
+    if not ring:
+        flash(f"Ring with ID {ring_id} not found", "error")
+        return redirect(url_for('index'))
+    
+    # Connect to ring
+    try:
+        # Create a new event loop for the connection
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         
-    # Create a new event loop for this request
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+        # Get the ring's MAC address
+        mac_address = ring.get('mac_address')
+        if not mac_address:
+            flash(f"Ring with ID {ring_id} has no MAC address", "error")
+            return redirect(url_for('index'))
+        
+        # Connect to the ring
+        connected = ring_manager._connect_to_ring(mac_address, ring_id)
+        
+        if connected:
+            flash(f"Successfully connected to ring {ring.get('name')}", "success")
+        else:
+            flash(f"Failed to connect to ring {ring.get('name')}", "error")
+    except Exception as e:
+        logger.error(f"Error connecting to ring {ring_id}: {e}")
+        flash(f"Error connecting to ring: {str(e)}", "error")
     
-    # Connect to the ring
-    success = loop.run_until_complete(ring_manager.connect_ring(ring_id))
-    
-    # Close the loop
-    loop.close()
-    
-    return jsonify({
-        "success": success,
-        "error": "Failed to connect to ring" if not success else None
-    })
+    return redirect(url_for('index'))
 
 @app.route('/api/ring/<int:ring_id>/disconnect', methods=['POST'])
 def disconnect_ring(ring_id):

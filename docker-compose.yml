@@ -5,23 +5,28 @@ services:
     build: .
     container_name: zeddring
     restart: unless-stopped
-    network_mode: host
     privileged: true
+    network_mode: host
     volumes:
-      - ./data:/data
+      - ./data:/app/data
+      - /var/run/dbus:/var/run/dbus
+      - /var/run/bluetooth:/var/run/bluetooth
+      - /dev/bus/usb:/dev/bus/usb
     devices:
-      - "/dev/ttyAMA0:/dev/ttyAMA0"
-      - "/dev/vcio:/dev/vcio"
-      - "/dev/input/event0:/dev/input/event0"
-      # Add Bluetooth device
-      - "/dev/bluetooth:/dev/bluetooth"
-    # Add capabilities for Bluetooth
+      - /dev/bluetooth:/dev/bluetooth
+      - /dev/input:/dev/input
     cap_add:
       - NET_ADMIN
       - NET_RAW
       - SYS_ADMIN
     environment:
-      - ZEDDRING_DB_PATH=/data/zeddring_data.sqlite
+      - PYTHONUNBUFFERED=1
+      - FLASK_APP=zeddring.web
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
+      - SECRET_KEY=zeddring_secret_key_change_in_production
+      - ZEDDRING_DB_PATH=/app/data/zeddring_data.sqlite
       - ZEDDRING_SCAN_INTERVAL=20
       - ZEDDRING_SCAN_TIMEOUT=10
       - ZEDDRING_MAX_RETRY_ATTEMPTS=3
@@ -29,4 +34,6 @@ services:
       - ZEDDRING_WEB_HOST=0.0.0.0
       - ZEDDRING_WEB_PORT=5000
       - ZEDDRING_DEBUG=False
-      - ZEDDRING_PERSISTENT_CONNECTION=True 
+      - ZEDDRING_PERSISTENT_CONNECTION=True
+    ports:
+      - "5000:5000" 

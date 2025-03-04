@@ -6,8 +6,11 @@ import time
 import random
 import datetime
 import asyncio
+import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from bleak import BleakScanner, BleakError
+from zeddring.database import get_db_connection
 
 # Configure logging
 logging.basicConfig(
@@ -16,169 +19,206 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zeddring.scanner")
 
+# Define the Colmi device name pattern
+COLMI_DEVICE_PATTERN = re.compile(r'colmi', re.IGNORECASE)
+
 @dataclass
 class ColmiDevice:
     """Class representing a Colmi device."""
     name: str
     address: str
 
-def scan_for_devices(timeout: int = 10) -> List[ColmiDevice]:
-    """
-    Scan for Bluetooth devices using multiple methods.
-    
-    Args:
-        timeout: Scan timeout in seconds
+async def scan_with_bleak(timeout: int = 10) -> List[Dict[str, Any]]:
+    """Scan for BLE devices using Bleak."""
+    logger.info("Scanning for Bluetooth devices using Bleak...")
+    try:
+        devices = await BleakScanner.discover(timeout=timeout)
+        logger.info(f"Found {len(devices)} devices with Bleak")
         
-    Returns:
-        List of found Colmi devices
+        found_devices = []
+        for device in devices:
+            device_info = {
+                "address": device.address,
+                "name": device.name or "Unknown",
+                "rssi": device.rssi,
+                "metadata": device.metadata
+            }
+            logger.debug(f"Found device: {device_info}")
+            found_devices.append(device_info)
+        
+        return found_devices
+    except BleakError as e:
+        logger.error(f"Bleak scanning error: {e}")
+        return []
+    except Exception as e:
+        logger.error(f"Unexpected error during Bleak scanning: {e}")
+        return []
+
+def scan_with_hcitool() -> List[Dict[str, Any]]:
+    """Scan for BLE devices using hcitool."""
+    logger.info("Scanning for Bluetooth devices using hcitool...")
+    try:
+        # Run hcitool lescan for a short time
+        process = subprocess.Popen(
+            ["timeout", "5", "hcitool", "lescan"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        time.sleep(5)  # Give it time to scan
+        process.terminate()
+        
+        # Now get the cached results
+        result = subprocess.run(
+            ["hcitool", "leinfo", "--cached"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        if result.returncode != 0:
+            logger.warning(f"hcitool command failed: {result.stderr}")
+            return []
+        
+        # Parse the output
+        found_devices = []
+        lines = result.stdout.strip().split('\n')
+        current_device = None
+        
+        for line in lines:
+            if ":" in line and len(line.split(':')) == 6:  # MAC address format
+                mac = line.strip()
+                current_device = {
+                    "address": mac,
+                    "name": "Unknown",
+                    "rssi": None
+                }
+                found_devices.append(current_device)
+            elif current_device and "Name" in line:
+                name_match = re.search(r'Name:\s+(.+)', line)
+                if name_match:
+                    current_device["name"] = name_match.group(1)
+        
+        logger.info(f"Found {len(found_devices)} devices with hcitool")
+        return found_devices
+    except Exception as e:
+        logger.error(f"Error scanning with hcitool: {e}")
+        return []
+
+def scan_with_bluetoothctl() -> List[Dict[str, Any]]:
+    """Scan for BLE devices using bluetoothctl."""
+    logger.info("Scanning for Bluetooth devices using bluetoothctl...")
+    try:
+        # Start scan
+        subprocess.run(
+            ["bluetoothctl", "scan", "on"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=2
+        )
+        
+        # Wait for scan to collect some data
+        time.sleep(5)
+        
+        # Get devices
+        result = subprocess.run(
+            ["bluetoothctl", "devices"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        # Stop scan
+        subprocess.run(
+            ["bluetoothctl", "scan", "off"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        
+        if result.returncode != 0:
+            logger.warning(f"bluetoothctl command failed: {result.stderr}")
+            return []
+        
+        # Parse the output
+        found_devices = []
+        device_pattern = re.compile(r'Device\s+([0-9A-F:]+)\s+(.*)')
+        
+        for line in result.stdout.strip().split('\n'):
+            match = device_pattern.match(line)
+            if match:
+                mac, name = match.groups()
+                device_info = {
+                    "address": mac,
+                    "name": name or "Unknown",
+                    "rssi": None
+                }
+                found_devices.append(device_info)
+        
+        logger.info(f"Found {len(found_devices)} devices with bluetoothctl")
+        return found_devices
+    except Exception as e:
+        logger.error(f"Error scanning with bluetoothctl: {e}")
+        return []
+
+def is_colmi_device(device: Dict[str, Any]) -> bool:
+    """Check if a device is a Colmi device based on its name."""
+    name = device.get("name", "").lower()
+    return bool(COLMI_DEVICE_PATTERN.search(name))
+
+async def scan_for_devices(timeout: int = 10) -> List[Dict[str, Any]]:
     """
-    devices = []
+    Scan for Colmi devices using multiple methods.
+    Returns a list of found Colmi devices.
+    """
+    logger.info("Starting scan for Colmi devices...")
     
     # Try different scanning methods
-    methods = [
-        scan_with_bleak,
-        scan_with_hcitool,
-        scan_with_bluetoothctl
-    ]
+    all_devices = []
     
-    for method in methods:
-        try:
-            logger.info(f"Trying to scan with {method.__name__}")
-            found_devices = method(timeout)
-            if found_devices:
-                devices.extend(found_devices)
-                logger.info(f"Found {len(found_devices)} devices with {method.__name__}")
-                break
-        except Exception as e:
-            logger.error(f"Error scanning with {method.__name__}: {e}")
+    # Method 1: Bleak
+    bleak_devices = await scan_with_bleak(timeout)
+    all_devices.extend(bleak_devices)
     
-    # If no devices found with any method, return a mock device with a different MAC address
-    if not devices:
-        logger.warning("No devices found, returning mock device")
-        devices = [ColmiDevice(name="Mock Colmi R02", address="00:11:22:33:44:55")]
+    # If Bleak didn't find any devices, try other methods
+    if not bleak_devices:
+        logger.warning("Bleak scanning found no devices, trying alternative methods")
+        
+        # Method 2: hcitool
+        hcitool_devices = scan_with_hcitool()
+        all_devices.extend(hcitool_devices)
+        
+        # Method 3: bluetoothctl
+        if not hcitool_devices:
+            bluetoothctl_devices = scan_with_bluetoothctl()
+            all_devices.extend(bluetoothctl_devices)
     
-    return devices
-
-def scan_with_bleak(timeout: int = 10) -> List[ColmiDevice]:
-    """
-    Scan for Bluetooth devices using Bleak.
+    # Filter for Colmi devices
+    colmi_devices = [device for device in all_devices if is_colmi_device(device)]
+    logger.info(f"Found {len(colmi_devices)} Colmi devices out of {len(all_devices)} total devices")
     
-    Args:
-        timeout: Scan timeout in seconds
+    # If no devices found, check if we already have a mock device in the database
+    if not colmi_devices:
+        logger.warning("No Colmi devices found during scan")
         
-    Returns:
-        List of found Colmi devices
-    """
-    try:
-        from bleak import BleakScanner
+        # Check if we already have a mock device in the database
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM rings WHERE mac_address = ?", ("00:11:22:33:44:55",))
+        existing_mock = cursor.fetchone()
+        conn.close()
         
-        async def scan():
-            logger.info("Starting Bleak scan...")
-            devices = await BleakScanner.discover(timeout=timeout)
-            logger.info(f"Bleak scan completed, found {len(devices)} devices")
-            return devices
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        discovered_devices = loop.run_until_complete(scan())
-        loop.close()
-        
-        colmi_devices = []
-        for device in discovered_devices:
-            name = device.name or ""
-            address = device.address
-            logger.info(f"Found device: {name} ({address})")
-            if name and ("Colmi" in name or "R02" in name):
-                colmi_devices.append(ColmiDevice(name=name, address=address))
-                logger.info(f"Added Colmi device: {name} ({address})")
-                
-        return colmi_devices
-    except ImportError:
-        logger.error("Bleak not available")
-        return []
-    except Exception as e:
-        logger.error(f"Error in Bleak scanning: {e}")
-        return []
-
-def scan_with_hcitool(timeout: int = 10) -> List[ColmiDevice]:
-    """
-    Scan for Bluetooth devices using hcitool.
+        if existing_mock:
+            logger.warning("Mock device already exists in database, not adding another one")
+        else:
+            logger.warning("Adding mock device as fallback")
+            mock_device = {
+                "address": "00:11:22:33:44:55",
+                "name": "Mock Colmi Ring",
+                "rssi": -50,
+                "is_mock": True
+            }
+            colmi_devices.append(mock_device)
     
-    Args:
-        timeout: Scan timeout in seconds
-        
-    Returns:
-        List of found Colmi devices
-    """
-    try:
-        # Run hcitool lescan
-        process = subprocess.Popen(
-            ["timeout", str(timeout), "hcitool", "lescan"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        stdout, stderr = process.communicate()
-        
-        if process.returncode != 0 and process.returncode != 124:  # 124 is timeout's return code
-            logger.error(f"hcitool failed: {stderr}")
-            return []
-        
-        # Parse output
-        colmi_devices = []
-        for line in stdout.splitlines():
-            if "Colmi" in line or "R02" in line:
-                parts = line.strip().split(" ", 1)
-                if len(parts) == 2:
-                    address, name = parts
-                    colmi_devices.append(ColmiDevice(name=name, address=address))
-        
-        return colmi_devices
-    except Exception as e:
-        logger.error(f"Error using hcitool: {e}")
-        return []
-
-def scan_with_bluetoothctl(timeout: int = 10) -> List[ColmiDevice]:
-    """
-    Scan for Bluetooth devices using bluetoothctl.
-    
-    Args:
-        timeout: Scan timeout in seconds
-        
-    Returns:
-        List of found Colmi devices
-    """
-    try:
-        # Start bluetoothctl and scan
-        commands = f"scan on\nsleep {timeout}\nscan off\ndevices\nquit\n"
-        process = subprocess.Popen(
-            ["bluetoothctl"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        stdout, stderr = process.communicate(commands)
-        
-        if process.returncode != 0:
-            logger.error(f"bluetoothctl failed: {stderr}")
-            return []
-        
-        # Parse output
-        colmi_devices = []
-        for line in stdout.splitlines():
-            if "Device" in line and ("Colmi" in line or "R02" in line):
-                parts = line.strip().split(" ", 2)
-                if len(parts) == 3:
-                    _, address, name = parts
-                    colmi_devices.append(ColmiDevice(name=name, address=address))
-        
-        return colmi_devices
-    except Exception as e:
-        logger.error(f"Error using bluetoothctl: {e}")
-        return []
+    return colmi_devices
 
 class MockColmiR02Client:
     """Mock implementation of ColmiR02Client for testing."""

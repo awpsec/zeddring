@@ -17,6 +17,16 @@
         <section class="dashboard">
             <h2>Your Rings</h2>
             
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    <div class="flash-messages">
+                        {% for message in messages %}
+                            <div class="flash-message">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+            
             {% if rings %}
                 <div class="ring-grid">
                     {% for ring in rings %}
@@ -71,6 +81,9 @@
                             
                             <div class="ring-actions">
                                 <a href="{{ url_for('ring_detail', ring_id=ring.id) }}" class="button">View Details</a>
+                                {% if not ring.connected %}
+                                <a href="{{ url_for('connect_ring', ring_id=ring.id) }}" class="button primary">Connect</a>
+                                {% endif %}
                             </div>
                         </div>
                     {% endfor %}
