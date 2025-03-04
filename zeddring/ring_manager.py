@@ -290,7 +290,14 @@ class RingManager:
             try:
                 # Scan for devices
                 logger.info("Scanning for devices...")
-                devices = scan_for_devices(timeout=10)
+                # Create a new event loop for this thread
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                # Run the coroutine and get the result
+                devices = loop.run_until_complete(scan_for_devices(timeout=10))
+                loop.close()
+                
                 logger.info(f"Found {len(devices)} devices")
                 
                 # Process found devices
@@ -430,8 +437,9 @@ class RingManager:
                 logger.error(f"Ring {ring_id} not found in database")
                 return False
             
-            is_mock_in_db = ring_info.get('is_mock', 0) == 1
-            ring_name = ring_info.get('name', 'Unknown Ring')
+            # Handle sqlite3.Row objects which don't have a get method
+            is_mock_in_db = ring_info['is_mock'] == 1 if 'is_mock' in ring_info.keys() else False
+            ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
             
             # Create client
             # For manually added rings (not the default mock), always try to use the real client

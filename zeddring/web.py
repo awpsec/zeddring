@@ -125,19 +125,19 @@ def connect_ring(ring_id):
     logger.info(f"Connecting to ring {ring_id}")
     
     # Get ring manager from app config
-    ring_manager = app.config.get('RING_MANAGER')
+    ring_manager = current_app.config.get('RING_MANAGER')
     if not ring_manager:
         flash("Ring manager not available", "error")
         return redirect(url_for('index'))
     
     # Get database from app config
-    db = app.config.get('DB')
-    if not db:
+    database = current_app.config.get('DATABASE')
+    if not database:
         flash("Database not available", "error")
         return redirect(url_for('index'))
     
     # Check if ring exists
-    ring = db.get_ring(ring_id)
+    ring = database.get_ring(ring_id)
     if not ring:
         flash(f"Ring with ID {ring_id} not found", "error")
         return redirect(url_for('index'))
@@ -148,8 +148,8 @@ def connect_ring(ring_id):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        # Get the ring's MAC address
-        mac_address = ring.get('mac_address')
+        # Get the ring's MAC address - handle sqlite3.Row objects
+        mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
         if not mac_address:
             flash(f"Ring with ID {ring_id} has no MAC address", "error")
             return redirect(url_for('index'))
@@ -157,10 +157,11 @@ def connect_ring(ring_id):
         # Connect to the ring
         connected = ring_manager._connect_to_ring(mac_address, ring_id)
         
+        ring_name = ring['name'] if 'name' in ring.keys() else 'Unknown Ring'
         if connected:
-            flash(f"Successfully connected to ring {ring.get('name')}", "success")
+            flash(f"Successfully connected to ring {ring_name}", "success")
         else:
-            flash(f"Failed to connect to ring {ring.get('name')}", "error")
+            flash(f"Failed to connect to ring {ring_name}", "error")
     except Exception as e:
         logger.error(f"Error connecting to ring {ring_id}: {e}")
         flash(f"Error connecting to ring: {str(e)}", "error")
@@ -334,7 +335,9 @@ def sync_ring_data(ring_id):
         return jsonify({"success": False, "error": "Ring not found"}), 404
         
     # Check if the ring is connected
-    if ring_id not in ring_manager.rings or not ring_manager.rings[ring_id].connected:
+    # The RingManager doesn't have a 'rings' attribute, so we need to check the connected_rings
+    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
+    if not mac_address or mac_address not in ring_manager.connected_rings or not ring_manager.connected_rings[mac_address]:
         return jsonify({"success": False, "error": "Ring is not connected"}), 400
         
     try:
@@ -342,13 +345,27 @@ def sync_ring_data(ring_id):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        # Sync historical data - we need to create a Ring object
+        client = ring_manager.clients.get(mac_address)
+        if not client:
+            return jsonify({"success": False, "error": "Client not found for ring"}), 500
+            
+        # Create a temporary Ring object to sync data
+        temp_ring = Ring(ring_id, ring['name'] if 'name' in ring.keys() else 'Unknown', mac_address)
+        temp_ring.client = client
+        temp_ring.connected = True
+        temp_ring.db = ring_manager.db
+        
         # Sync historical data
-        loop.run_until_complete(ring_manager.rings[ring_id].sync_historical_data())
+        success = loop.run_until_complete(temp_ring.sync_historical_data())
         
         # Close the loop
         loop.close()
         
-        return jsonify({"success": True, "message": "Historical data synced successfully"})
+        if success:
+            return jsonify({"success": True, "message": "Historical data synced successfully"})
+        else:
+            return jsonify({"success": False, "error": "Failed to sync historical data"}), 500
     except Exception as e:
         logger.error(f"Error syncing historical data for ring {ring_id}: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
@@ -366,7 +383,9 @@ def set_ring_time(ring_id):
         return jsonify({"success": False, "error": "Ring not found"}), 404
         
     # Check if the ring is connected
-    if ring_id not in ring_manager.rings or not ring_manager.rings[ring_id].connected:
+    # The RingManager doesn't have a 'rings' attribute, so we need to check the connected_rings
+    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
+    if not mac_address or mac_address not in ring_manager.connected_rings or not ring_manager.connected_rings[mac_address]:
         return jsonify({"success": False, "error": "Ring is not connected"}), 400
         
     try:
@@ -374,8 +393,18 @@ def set_ring_time(ring_id):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        # Get the client
+        client = ring_manager.clients.get(mac_address)
+        if not client:
+            return jsonify({"success": False, "error": "Client not found for ring"}), 500
+            
+        # Create a temporary Ring object to set time
+        temp_ring = Ring(ring_id, ring['name'] if 'name' in ring.keys() else 'Unknown', mac_address)
+        temp_ring.client = client
+        temp_ring.connected = True
+        
         # Set the time on the ring
-        success = loop.run_until_complete(ring_manager.rings[ring_id].set_ring_time())
+        success = loop.run_until_complete(temp_ring.set_ring_time())
         
         # Close the loop
         loop.close()
@@ -404,8 +433,8 @@ def api_connect_ring(ring_id):
     if not ring:
         return jsonify({"success": False, "error": "Ring not found"}), 404
         
-    # Get the ring's MAC address
-    mac_address = ring.get('mac_address')
+    # Get the ring's MAC address - handle sqlite3.Row objects
+    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
     if not mac_address:
         return jsonify({"success": False, "error": "Ring has no MAC address"}), 400
     
@@ -441,7 +470,9 @@ def reboot_ring(ring_id):
         return jsonify({"success": False, "error": "Ring not found"}), 404
         
     # Check if the ring is connected
-    if ring_id not in ring_manager.rings or not ring_manager.rings[ring_id].connected:
+    # The RingManager doesn't have a 'rings' attribute, so we need to check the connected_rings
+    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
+    if not mac_address or mac_address not in ring_manager.connected_rings or not ring_manager.connected_rings[mac_address]:
         return jsonify({"success": False, "error": "Ring is not connected"}), 400
         
     try:
@@ -449,8 +480,18 @@ def reboot_ring(ring_id):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        # Get the client
+        client = ring_manager.clients.get(mac_address)
+        if not client:
+            return jsonify({"success": False, "error": "Client not found for ring"}), 500
+            
+        # Create a temporary Ring object to reboot
+        temp_ring = Ring(ring_id, ring['name'] if 'name' in ring.keys() else 'Unknown', mac_address)
+        temp_ring.client = client
+        temp_ring.connected = True
+        
         # Reboot the ring
-        success = loop.run_until_complete(ring_manager.rings[ring_id].reboot())
+        success = loop.run_until_complete(temp_ring.reboot())
         
         # Close the loop
         loop.close()
