@@ -1,0 +1,467 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ring.name or 'Unnamed Ring' }} - Zeddring{% endblock %}
+
+{% block content %}
+<div class="ring-detail">
+    <div class="ring-header">
+        <h2>{{ ring.name or 'Unnamed Ring' }}</h2>
+        <div class="ring-status {% if ring.connected %}connected{% else %}disconnected{% endif %}">
+            {% if ring.connected %}Connected{% else %}Disconnected{% endif %}
+        </div>
+    </div>
+    
+    <div class="ring-info-card">
+        <div class="ring-info">
+            <p><strong>MAC Address:</strong> {{ ring.mac_address }}</p>
+            <p><strong>Battery Level:</strong> {{ ring.battery_level or 'Unknown' }}%</p>
+            <p><strong>Last Seen:</strong> {{ ring.last_seen or 'Never' }}</p>
+        </div>
+        <div class="ring-actions">
+            {% if ring.connected %}
+                <button class="btn disconnect-btn" data-ring-id="{{ ring.id }}">Disconnect</button>
+            {% else %}
+                <button class="btn connect-btn" data-ring-id="{{ ring.id }}">Connect</button>
+            {% endif %}
+            <button class="btn reboot-btn" data-ring-id="{{ ring.id }}">Reboot</button>
+            <button class="btn rename-btn" data-ring-id="{{ ring.id }}" data-ring-name="{{ ring.name or '' }}">Rename</button>
+        </div>
+    </div>
+    
+    <div class="data-controls">
+        <div class="time-range">
+            <label for="time-range">Time Range:</label>
+            <select id="time-range">
+                <option value="1">Last 24 Hours</option>
+                <option value="7">Last 7 Days</option>
+                <option value="30">Last 30 Days</option>
+                <option value="90">Last 90 Days</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="data-cards">
+        <div class="card">
+            <h3>Heart Rate</h3>
+            <div class="chart-container">
+                <canvas id="heart-rate-chart"></canvas>
+            </div>
+            <div class="stats" id="heart-rate-stats">
+                <div class="stat">
+                    <span class="stat-label">Current:</span>
+                    <span class="stat-value" id="current-hr">--</span>
+                    <span class="stat-unit">bpm</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Average:</span>
+                    <span class="stat-value" id="avg-hr">--</span>
+                    <span class="stat-unit">bpm</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Min:</span>
+                    <span class="stat-value" id="min-hr">--</span>
+                    <span class="stat-unit">bpm</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Max:</span>
+                    <span class="stat-value" id="max-hr">--</span>
+                    <span class="stat-unit">bpm</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h3>Steps</h3>
+            <div class="chart-container">
+                <canvas id="steps-chart"></canvas>
+            </div>
+            <div class="stats" id="steps-stats">
+                <div class="stat">
+                    <span class="stat-label">Today:</span>
+                    <span class="stat-value" id="today-steps">--</span>
+                    <span class="stat-unit">steps</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Average:</span>
+                    <span class="stat-value" id="avg-steps">--</span>
+                    <span class="stat-unit">steps/day</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Total:</span>
+                    <span class="stat-value" id="total-steps">--</span>
+                    <span class="stat-unit">steps</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="rename-modal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h3>Rename Ring</h3>
+        <form id="rename-form">
+            <input type="hidden" id="rename-ring-id" value="{{ ring.id }}">
+            <div class="form-group">
+                <label for="new-name">New Name:</label>
+                <input type="text" id="new-name" name="new-name" value="{{ ring.name or '' }}" required>
+            </div>
+            <button type="submit" class="btn">Save</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const ringId = {{ ring.id }};
+        let heartRateChart = null;
+        let stepsChart = null;
+        
+        // Initialize charts
+        function initCharts() {
+            // Heart Rate Chart
+            const hrCtx = document.getElementById('heart-rate-chart').getContext('2d');
+            heartRateChart = new Chart(hrCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Heart Rate',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'hour',
+                                displayFormats: {
+                                    hour: 'HH:mm'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        },
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'BPM'
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Steps Chart
+            const stepsCtx = document.getElementById('steps-chart').getContext('2d');
+            stepsChart = new Chart(stepsCtx, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Steps',
+                        data: [],
+                        backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                        borderColor: 'rgb(54, 162, 235)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: 'day',
+                                displayFormats: {
+                                    day: 'MMM d'
+                                }
+                            },
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: {
+                                display: true,
+                                text: 'Steps'
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Load data based on time range
+        function loadData(days) {
+            // Load heart rate data
+            fetch(`/api/ring/${ringId}/heart-rate?days=${days}`)
+                .then(response => response.json())
+                .then(data => {
+                    updateHeartRateChart(data);
+                })
+                .catch(error => {
+                    console.error('Error loading heart rate data:', error);
+                });
+                
+            // Load heart rate stats
+            fetch(`/api/ring/${ringId}/heart-rate/stats?days=${days}`)
+                .then(response => response.json())
+                .then(data => {
+                    updateHeartRateStats(data);
+                })
+                .catch(error => {
+                    console.error('Error loading heart rate stats:', error);
+                });
+                
+            // Load steps data
+            fetch(`/api/ring/${ringId}/steps/stats?days=${days}`)
+                .then(response => response.json())
+                .then(data => {
+                    updateStepsChart(data);
+                })
+                .catch(error => {
+                    console.error('Error loading steps data:', error);
+                });
+        }
+        
+        // Update heart rate chart
+        function updateHeartRateChart(data) {
+            if (!heartRateChart) return;
+            
+            const chartData = data.map(item => ({
+                x: new Date(item.timestamp),
+                y: item.value
+            }));
+            
+            heartRateChart.data.datasets[0].data = chartData;
+            heartRateChart.update();
+            
+            // Update current heart rate
+            if (chartData.length > 0) {
+                document.getElementById('current-hr').textContent = chartData[0].y;
+            }
+            
+            // Calculate min, max, avg
+            if (chartData.length > 0) {
+                const values = chartData.map(item => item.y);
+                const min = Math.min(...values);
+                const max = Math.max(...values);
+                const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+                
+                document.getElementById('min-hr').textContent = min;
+                document.getElementById('max-hr').textContent = max;
+                document.getElementById('avg-hr').textContent = avg;
+            }
+        }
+        
+        // Update heart rate stats
+        function updateHeartRateStats(data) {
+            if (data.length === 0) return;
+            
+            let totalAvg = 0;
+            let totalCount = 0;
+            let min = Infinity;
+            let max = 0;
+            
+            data.forEach(day => {
+                totalAvg += day.avg_value * day.count;
+                totalCount += day.count;
+                min = Math.min(min, day.min_value);
+                max = Math.max(max, day.max_value);
+            });
+            
+            const avg = Math.round(totalAvg / totalCount);
+            
+            document.getElementById('min-hr').textContent = min === Infinity ? '--' : min;
+            document.getElementById('max-hr').textContent = max;
+            document.getElementById('avg-hr').textContent = isNaN(avg) ? '--' : avg;
+        }
+        
+        // Update steps chart
+        function updateStepsChart(data) {
+            if (!stepsChart) return;
+            
+            const chartData = data.map(item => ({
+                x: new Date(item.date),
+                y: item.max_value
+            }));
+            
+            stepsChart.data.datasets[0].data = chartData;
+            stepsChart.update();
+            
+            // Update steps stats
+            if (chartData.length > 0) {
+                // Today's steps
+                const today = new Date().toISOString().split('T')[0];
+                const todayData = chartData.find(item => item.x.toISOString().split('T')[0] === today);
+                document.getElementById('today-steps').textContent = todayData ? todayData.y : '0';
+                
+                // Average steps
+                const totalSteps = chartData.reduce((sum, item) => sum + item.y, 0);
+                const avgSteps = Math.round(totalSteps / chartData.length);
+                document.getElementById('avg-steps').textContent = avgSteps;
+                
+                // Total steps
+                document.getElementById('total-steps').textContent = totalSteps;
+            }
+        }
+        
+        // Initialize
+        initCharts();
+        loadData(1); // Default to 1 day
+        
+        // Time range selector
+        const timeRangeSelect = document.getElementById('time-range');
+        if (timeRangeSelect) {
+            timeRangeSelect.addEventListener('change', function() {
+                const days = parseInt(this.value);
+                loadData(days);
+            });
+        }
+        
+        // Connect Button
+        const connectBtn = document.querySelector('.connect-btn');
+        if (connectBtn) {
+            connectBtn.addEventListener('click', function() {
+                fetch(`/api/ring/${ringId}/connect`, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.reload();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while connecting to the ring.');
+                });
+            });
+        }
+        
+        // Disconnect Button
+        const disconnectBtn = document.querySelector('.disconnect-btn');
+        if (disconnectBtn) {
+            disconnectBtn.addEventListener('click', function() {
+                fetch(`/api/ring/${ringId}/disconnect`, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        window.location.reload();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while disconnecting from the ring.');
+                });
+            });
+        }
+        
+        // Reboot Button
+        const rebootBtn = document.querySelector('.reboot-btn');
+        if (rebootBtn) {
+            rebootBtn.addEventListener('click', function() {
+                if (!confirm('Are you sure you want to reboot this ring?')) {
+                    return;
+                }
+                
+                fetch(`/api/ring/${ringId}/reboot`, {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Ring is rebooting. Please wait a moment before reconnecting.');
+                        window.location.reload();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while rebooting the ring.');
+                });
+            });
+        }
+        
+        // Rename Modal
+        const modal = document.getElementById('rename-modal');
+        const renameBtn = document.querySelector('.rename-btn');
+        const closeBtn = document.querySelector('.close');
+        const renameForm = document.getElementById('rename-form');
+        
+        if (renameBtn) {
+            renameBtn.addEventListener('click', function() {
+                modal.style.display = 'block';
+            });
+        }
+        
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function() {
+                modal.style.display = 'none';
+            });
+        }
+        
+        window.addEventListener('click', function(event) {
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        });
+        
+        if (renameForm) {
+            renameForm.addEventListener('submit', function(e) {
+                e.preventDefault();
+                
+                const newName = document.getElementById('new-name').value;
+                
+                fetch(`/api/ring/${ringId}/rename`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: newName
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        modal.style.display = 'none';
+                        window.location.reload();
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert('An error occurred while renaming the ring.');
+                });
+            });
+        }
+    });
+</script>
+{% endblock %} 
