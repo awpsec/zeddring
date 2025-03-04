@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM python:3.11-slim
 
 WORKDIR /app
 
@@ -26,7 +26,7 @@ RUN mkdir -p /data
 ENV ZEDDRING_DB_PATH=/data/zeddring_data.sqlite
 
 # Set permissions for Bluetooth
-RUN setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/bin/python3.9
+RUN setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/bin/python3.11
 
 # Expose web interface port
 EXPOSE 5000
