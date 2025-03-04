@@ -75,21 +75,43 @@ RUN python -c "try: \
                 if inspect.isclass(subobj): \
                     print(f'  Class: {subname}'); \
                     print(f'    Methods: {[m for m in dir(subobj) if not m.startswith(\"_\")]}'); \
-    try: from colmi_r02_client import Client; print('ColmiClient (Client) successfully imported'); \
-    except ImportError: print('Client class not found'); \
-    try: from colmi_r02_client import ColmiR02Client; print('ColmiClient (ColmiR02Client) successfully imported'); \
-    except ImportError: print('ColmiR02Client class not found'); \
-    try: from colmi_r02_client import ColmiClient; print('ColmiClient (ColmiClient) successfully imported'); \
-    except ImportError: print('ColmiClient class not found'); \
-    try: from colmi_r02_client.client import Client; print('ColmiClient (client.Client) successfully imported'); \
-    except ImportError: print('client.Client class not found'); \
-    try: from colmi_r02_client.client import ColmiR02Client; print('ColmiClient (client.ColmiR02Client) successfully imported'); \
-    except ImportError: print('client.ColmiR02Client class not found'); \
-    try: from colmi_r02_client.client import ColmiClient; print('ColmiClient (client.ColmiClient) successfully imported'); \
-    except ImportError: print('client.ColmiClient class not found'); \
-    try: from colmi_r02_client.custom_client import Client; print('ColmiClient (custom_client.Client) successfully imported'); \
-    except ImportError: print('custom_client.Client class not found'); \
-except ImportError: print('Warning: colmi_r02_client package not available')"
+    try: \
+        from colmi_r02_client import Client; \
+        print('ColmiClient (Client) successfully imported'); \
+    except ImportError: \
+        print('Client class not found'); \
+    try: \
+        from colmi_r02_client import ColmiR02Client; \
+        print('ColmiClient (ColmiR02Client) successfully imported'); \
+    except ImportError: \
+        print('ColmiR02Client class not found'); \
+    try: \
+        from colmi_r02_client import ColmiClient; \
+        print('ColmiClient (ColmiClient) successfully imported'); \
+    except ImportError: \
+        print('ColmiClient class not found'); \
+    try: \
+        from colmi_r02_client.client import Client; \
+        print('ColmiClient (client.Client) successfully imported'); \
+    except ImportError: \
+        print('client.Client class not found'); \
+    try: \
+        from colmi_r02_client.client import ColmiR02Client; \
+        print('ColmiClient (client.ColmiR02Client) successfully imported'); \
+    except ImportError: \
+        print('client.ColmiR02Client class not found'); \
+    try: \
+        from colmi_r02_client.client import ColmiClient; \
+        print('ColmiClient (client.ColmiClient) successfully imported'); \
+    except ImportError: \
+        print('client.ColmiClient class not found'); \
+    try: \
+        from colmi_r02_client.custom_client import Client; \
+        print('ColmiClient (custom_client.Client) successfully imported'); \
+    except ImportError: \
+        print('custom_client.Client class not found'); \
+except ImportError: \
+    print('Warning: colmi_r02_client package not available')"
 
 # Print the source code of the package
 RUN find /tmp/colmi_r02_client -name "*.py" -exec echo "File: {}" \; -exec cat {} \; -exec echo "" \;
