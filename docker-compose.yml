@@ -13,10 +13,13 @@ services:
       - "/dev/ttyAMA0:/dev/ttyAMA0"
       - "/dev/vcio:/dev/vcio"
       - "/dev/input/event0:/dev/input/event0"
+      # Add Bluetooth device
+      - "/dev/bluetooth:/dev/bluetooth"
     # Add capabilities for Bluetooth
     cap_add:
       - NET_ADMIN
       - NET_RAW
+      - SYS_ADMIN
     environment:
       - ZEDDRING_DB_PATH=/data/zeddring_data.sqlite
       - ZEDDRING_SCAN_INTERVAL=20

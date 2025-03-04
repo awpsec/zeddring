@@ -60,6 +60,13 @@
                                     <span class="detail-value">{{ ring.last_connected }}</span>
                                 </div>
                                 {% endif %}
+                                
+                                {% if ring.last_sync %}
+                                <div class="detail-item">
+                                    <span class="detail-label">Last Sync:</span>
+                                    <span class="detail-value">{{ ring.last_sync }}</span>
+                                </div>
+                                {% endif %}
                             </div>
                             
                             <div class="ring-actions">

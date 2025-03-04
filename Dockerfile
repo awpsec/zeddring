@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y \
     libbluetooth-dev \
     git \
     libcap2-bin \
+    dbus \
+    libdbus-1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create bluetooth group and set permissions
@@ -29,8 +31,17 @@ ENV ZEDDRING_DB_PATH=/data/zeddring_data.sqlite
 # Set permissions for Bluetooth
 RUN setcap 'cap_net_raw,cap_net_admin+eip' /usr/local/bin/python3.11
 
+# Create startup script
+RUN echo '#!/bin/bash\n\
+# Fix Bluetooth permissions\n\
+service bluetooth restart || true\n\
+hciconfig hci0 up || true\n\
+# Run the application\n\
+python -m zeddring.app\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
 # Expose web interface port
 EXPOSE 5000
 
 # Run the application
-CMD ["python", "-m", "zeddring.app"] 
+CMD ["/app/start.sh"] 

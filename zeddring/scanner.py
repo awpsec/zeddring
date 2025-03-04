@@ -73,7 +73,9 @@ def scan_with_bleak(timeout: int = 10) -> List[ColmiDevice]:
         from bleak import BleakScanner
         
         async def scan():
+            logger.info("Starting Bleak scan...")
             devices = await BleakScanner.discover(timeout=timeout)
+            logger.info(f"Bleak scan completed, found {len(devices)} devices")
             return devices
         
         loop = asyncio.new_event_loop()
@@ -84,12 +86,18 @@ def scan_with_bleak(timeout: int = 10) -> List[ColmiDevice]:
         colmi_devices = []
         for device in discovered_devices:
             name = device.name or ""
+            address = device.address
+            logger.info(f"Found device: {name} ({address})")
             if name and ("Colmi" in name or "R02" in name):
-                colmi_devices.append(ColmiDevice(name=name, address=device.address))
+                colmi_devices.append(ColmiDevice(name=name, address=address))
+                logger.info(f"Added Colmi device: {name} ({address})")
                 
         return colmi_devices
     except ImportError:
         logger.error("Bleak not available")
+        return []
+    except Exception as e:
+        logger.error(f"Error in Bleak scanning: {e}")
         return []
 
 def scan_with_hcitool(timeout: int = 10) -> List[ColmiDevice]:

@@ -193,7 +193,7 @@ class Ring:
                     if timestamp and steps:
                         # Convert timestamp to datetime if needed
                         if isinstance(timestamp, str):
-                            timestamp = datetime.datetime.fromisoformat(timestamp)
+                            timestamp = datetime.fromisoformat(timestamp)
                         # Add to database with specific timestamp
                         self.db.add_steps_with_timestamp(self.id, steps, timestamp)
                         
@@ -204,7 +204,7 @@ class Ring:
                     if timestamp and heart_rate:
                         # Convert timestamp to datetime if needed
                         if isinstance(timestamp, str):
-                            timestamp = datetime.datetime.fromisoformat(timestamp)
+                            timestamp = datetime.fromisoformat(timestamp)
                         # Add to database with specific timestamp
                         self.db.add_heart_rate_with_timestamp(self.id, heart_rate, timestamp)
                         
@@ -314,7 +314,7 @@ class RingManager:
                     mac_address = ring['mac_address']
                     
                     # Check if we should connect to this ring
-                    if ring_id not in self.clients:
+                    if mac_address not in self.clients:
                         # Try to connect to the ring
                         if PERSISTENT_CONNECTION:
                             logger.info(f"Attempting to connect to ring {ring_id} ({mac_address})")
@@ -327,47 +327,61 @@ class RingManager:
                                 loop.close()
                     
                     # If the ring is connected, get data
-                    if ring_id in self.clients and self.clients[ring_id].connected:
+                    if mac_address in self.clients:
                         try:
                             # Create a new event loop for this ring
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             
                             # Get data from the ring
-                            ring_data = loop.run_until_complete(self.clients[ring_id].update_all())
+                            client = self.clients[mac_address]
+                            
+                            # Get heart rate
+                            try:
+                                heart_rate = loop.run_until_complete(client.get_heart_rate())
+                                if heart_rate and heart_rate > 0:
+                                    self.db.add_heart_rate(ring_id, heart_rate)
+                                    logger.debug(f"Added heart rate {heart_rate} for ring {ring_id}")
+                            except Exception as e:
+                                logger.error(f"Error getting heart rate: {e}")
+                            
+                            # Get steps
+                            try:
+                                steps = client.get_steps()
+                                if steps and steps > 0:
+                                    self.db.add_steps(ring_id, steps)
+                                    logger.debug(f"Added steps {steps} for ring {ring_id}")
+                            except Exception as e:
+                                logger.error(f"Error getting steps: {e}")
+                            
+                            # Get battery
+                            try:
+                                battery = client.get_battery()
+                                if battery is not None:
+                                    self.db.add_battery(ring_id, battery)
+                                    self.db.update_ring_battery(ring_id, battery)
+                                    logger.debug(f"Added battery {battery}% for ring {ring_id}")
+                            except Exception as e:
+                                logger.error(f"Error getting battery: {e}")
                             
                             # Close the loop
                             loop.close()
                             
-                            if ring_data:
-                                # Update the database
-                                if 'heart_rate' in ring_data and ring_data['heart_rate']:
-                                    self.db.add_heart_rate(ring_id, ring_data['heart_rate'])
-                                    logger.debug(f"Added heart rate {ring_data['heart_rate']} for ring {ring_id}")
-                                    
-                                if 'steps' in ring_data and ring_data['steps']:
-                                    self.db.add_steps(ring_id, ring_data['steps'])
-                                    logger.debug(f"Added steps {ring_data['steps']} for ring {ring_id}")
-                                    
-                                if 'battery' in ring_data and ring_data['battery'] is not None:
-                                    self.db.add_battery(ring_id, ring_data['battery'])
-                                    self.db.update_ring_battery(ring_id, ring_data['battery'])
-                                    logger.debug(f"Added battery {ring_data['battery']}% for ring {ring_id}")
                         except Exception as e:
                             logger.error(f"Error getting data from ring {ring_id}: {e}")
                             
                             # Disconnect if there was an error
-                            if ring_id in self.clients:
+                            if mac_address in self.clients:
                                 try:
                                     loop = asyncio.new_event_loop()
                                     asyncio.set_event_loop(loop)
-                                    loop.run_until_complete(self.clients[ring_id].disconnect())
+                                    loop.run_until_complete(self.clients[mac_address].disconnect())
                                     loop.close()
                                 except Exception as disconnect_error:
                                     logger.error(f"Error disconnecting from ring {ring_id}: {disconnect_error}")
                                 finally:
-                                    if ring_id in self.clients:
-                                        del self.clients[ring_id]
+                                    if mac_address in self.clients:
+                                        del self.clients[mac_address]
                 
                 # Sleep before next collection
                 time.sleep(SCAN_INTERVAL)
@@ -386,8 +400,10 @@ class RingManager:
                 
             # Create client
             if COLMI_CLIENT_AVAILABLE:
+                logger.info(f"Using real ColmiClient for {mac_address}")
                 client = ColmiClient(mac_address)
             else:
+                logger.warning(f"ColmiClient not available, using MockColmiR02Client for {mac_address}")
                 client = MockColmiR02Client(mac_address)
                 
             # Connect
@@ -396,13 +412,30 @@ class RingManager:
             # Handle the async connect
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            connected = loop.run_until_complete(client.connect())
-            loop.close()
+            try:
+                connected = loop.run_until_complete(client.connect())
+            except Exception as e:
+                logger.error(f"Error during connect: {e}")
+                connected = False
+            finally:
+                loop.close()
                 
             if connected:
                 logger.info(f"Connected to {mac_address}")
                 self.clients[mac_address] = client
                 self.db.update_ring_connection(ring_id)
+                
+                # Try to sync historical data after connecting
+                try:
+                    logger.info(f"Syncing historical data for ring {ring_id}")
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(client.get_historical_data())
+                    loop.close()
+                    logger.info(f"Historical data sync completed for ring {ring_id}")
+                except Exception as e:
+                    logger.error(f"Error syncing historical data: {e}")
+                    
                 return True
             else:
                 logger.error(f"Failed to connect to {mac_address}")
@@ -541,6 +574,20 @@ class RingManager:
                 if battery_data:
                     ring_dict['battery'] = battery_data[0]['value']
                     ring_dict['battery_time'] = battery_data[0]['timestamp']
+                
+                # Get last sync time (most recent data point)
+                last_sync = None
+                if heart_rate_data and steps_data:
+                    hr_time = heart_rate_data[0]['timestamp']
+                    steps_time = steps_data[0]['timestamp']
+                    last_sync = max(hr_time, steps_time)
+                elif heart_rate_data:
+                    last_sync = heart_rate_data[0]['timestamp']
+                elif steps_data:
+                    last_sync = steps_data[0]['timestamp']
+                
+                if last_sync:
+                    ring_dict['last_sync'] = last_sync
             except Exception as e:
                 logger.error(f"Error getting data for ring {ring['id']}: {e}")
             

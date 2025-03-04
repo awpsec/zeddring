@@ -36,6 +36,23 @@ def main():
         # Initialize ring manager
         logger.info("Initializing ring manager...")
         ring_manager = get_ring_manager()
+        
+        # Try to fix Bluetooth permissions if running in Docker
+        try:
+            import subprocess
+            logger.info("Checking Bluetooth status...")
+            subprocess.run(["hciconfig", "-a"], check=False)
+            
+            # Try to bring up Bluetooth if it's down
+            try:
+                subprocess.run(["hciconfig", "hci0", "up"], check=False)
+                logger.info("Bluetooth device brought up")
+            except Exception as e:
+                logger.warning(f"Could not bring up Bluetooth device: {e}")
+        except Exception as e:
+            logger.warning(f"Could not check Bluetooth status: {e}")
+        
+        # Start ring manager
         ring_manager.start()
         
         # Initialize heart rate logger
