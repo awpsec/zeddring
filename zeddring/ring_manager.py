@@ -450,10 +450,7 @@ class RingManager:
                     logger.error(f"Error disconnecting from ring {ring_id}: {e}")
             
             # Remove from database
-            # This would need to be implemented in the Database class
-            # self.db.remove_ring(ring_id)
-            
-            return True
+            return self.db.remove_ring(ring_id)
         except Exception as e:
             logger.error(f"Error removing ring {ring_id}: {e}")
             return False

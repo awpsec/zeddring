@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger("zeddring.database")
 
 # Get database path from environment variable or use default
-DB_PATH = os.environ.get('ZEDDRING_DB_PATH', 'zeddring_data.sqlite')
+DB_PATH = os.environ.get('ZEDDRING_DB_PATH', DATABASE_PATH)
 
 def get_db_connection():
     """Get a connection to the SQLite database."""
@@ -243,11 +243,46 @@ class Database:
         conn.close()
         return data
 
+    def remove_ring(self, ring_id: int) -> bool:
+        """Remove a ring and all its data from the database."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Start a transaction
+            conn.execute("BEGIN TRANSACTION")
+            
+            # Delete heart rate data
+            cursor.execute("DELETE FROM heart_rate WHERE ring_id = ?", (ring_id,))
+            
+            # Delete steps data
+            cursor.execute("DELETE FROM steps WHERE ring_id = ?", (ring_id,))
+            
+            # Delete battery data
+            cursor.execute("DELETE FROM battery WHERE ring_id = ?", (ring_id,))
+            
+            # Delete the ring
+            cursor.execute("DELETE FROM rings WHERE id = ?", (ring_id,))
+            
+            # Commit the transaction
+            conn.commit()
+            
+            logger.info(f"Removed ring with ID {ring_id}")
+            return True
+        except Exception as e:
+            # Rollback in case of error
+            conn.rollback()
+            logger.error(f"Error removing ring {ring_id}: {e}")
+            return False
+        finally:
+            conn.close()
+
     def add_or_update_ring(self, mac_address: str, name: Optional[str] = None) -> int:
         """Add a new ring or update an existing one."""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
             # Check if ring exists
             cursor.execute("SELECT id FROM rings WHERE mac_address = ?", (mac_address,))
             result = cursor.fetchone()
@@ -264,14 +299,65 @@ class Database:
                         "UPDATE rings SET last_connected = CURRENT_TIMESTAMP WHERE id = ?",
                         (result['id'],)
                     )
+                conn.commit()
                 return result['id']
             else:
                 # Add new ring
                 cursor.execute(
                     "INSERT INTO rings (mac_address, name, last_connected) VALUES (?, ?, CURRENT_TIMESTAMP)",
-                    (mac_address, name)
+                    (mac_address, name or f"Ring {mac_address[-5:]}")
                 )
+                conn.commit()
                 return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def get_daily_heart_rate_stats(self, ring_id: int, days: int = 30) -> List[Dict[str, Any]]:
+        """Get daily heart rate statistics for the last N days."""
+        start_date = datetime.datetime.now() - datetime.timedelta(days=days)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                date(timestamp) as date,
+                MIN(value) as min_value,
+                MAX(value) as max_value,
+                AVG(value) as avg_value,
+                COUNT(*) as count
+            FROM heart_rate
+            WHERE ring_id = ? AND timestamp >= ?
+            GROUP BY date(timestamp)
+            ORDER BY date DESC
+        """, (ring_id, start_date))
+        
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        return result
+
+    def get_daily_steps_stats(self, ring_id: int, days: int = 30) -> List[Dict[str, Any]]:
+        """Get daily steps statistics for the last N days."""
+        start_date = datetime.datetime.now() - datetime.timedelta(days=days)
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT 
+                date(timestamp) as date,
+                MAX(value) as max_value
+            FROM steps
+            WHERE ring_id = ? AND timestamp >= ?
+            GROUP BY date(timestamp)
+            ORDER BY date DESC
+        """, (ring_id, start_date))
+        
+        result = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        
+        return result
 
     def update_ring_battery(self, ring_id: int, battery_level: int) -> None:
         """Update the battery level for a ring."""
