@@ -42,6 +42,7 @@ def init_db():
         name TEXT NOT NULL,
         mac_address TEXT UNIQUE NOT NULL,
         last_connected TIMESTAMP,
+        battery_level INTEGER,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -78,6 +79,19 @@ def init_db():
         FOREIGN KEY (ring_id) REFERENCES rings (id)
     )
     ''')
+    
+    # Check if battery_level column exists in rings table
+    cursor.execute("PRAGMA table_info(rings)")
+    columns = cursor.fetchall()
+    column_names = [column[1] for column in columns]
+    
+    # Add battery_level column if it doesn't exist
+    if 'battery_level' not in column_names:
+        try:
+            cursor.execute("ALTER TABLE rings ADD COLUMN battery_level INTEGER")
+            logger.info("Added battery_level column to rings table")
+        except sqlite3.OperationalError:
+            logger.info("battery_level column already exists in rings table")
     
     conn.commit()
     conn.close()
@@ -361,48 +375,68 @@ class Database:
 
     def update_ring_battery(self, ring_id: int, battery_level: int) -> None:
         """Update the battery level for a ring."""
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
             cursor.execute(
                 "UPDATE rings SET battery_level = ?, last_connected = CURRENT_TIMESTAMP WHERE id = ?",
                 (battery_level, ring_id)
             )
+            conn.commit()
+            logger.debug(f"Updated battery level for ring {ring_id} to {battery_level}%")
+        except Exception as e:
+            logger.error(f"Error updating battery level for ring {ring_id}: {e}")
+        finally:
+            conn.close()
 
-    def get_daily_heart_rate_stats(self, ring_id: int, days: int = 30) -> List[Dict[str, Any]]:
-        """Get daily heart rate statistics for the last N days."""
-        start_date = datetime.datetime.now() - datetime.timedelta(days=days)
+    def add_heart_rate_with_timestamp(self, ring_id: int, value: int, timestamp: datetime.datetime) -> None:
+        """Add a heart rate reading with a specific timestamp."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT 
-                    date(timestamp) as date,
-                    MIN(value) as min_value,
-                    MAX(value) as max_value,
-                    AVG(value) as avg_value,
-                    COUNT(*) as count
-                FROM heart_rate
-                WHERE ring_id = ? AND timestamp >= ?
-                GROUP BY date(timestamp)
-                ORDER BY date DESC
-            """, (ring_id, start_date))
+        try:
+            cursor.execute(
+                "INSERT INTO heart_rate (ring_id, value, timestamp) VALUES (?, ?, ?)",
+                (ring_id, value, timestamp)
+            )
+            conn.commit()
+            logger.debug(f"Added heart rate {value} for ring {ring_id} at {timestamp}")
+        except Exception as e:
+            logger.error(f"Error adding heart rate for ring {ring_id}: {e}")
+        finally:
+            conn.close()
             
-            return [dict(row) for row in cursor.fetchall()]
-
-    def get_daily_steps_stats(self, ring_id: int, days: int = 30) -> List[Dict[str, Any]]:
-        """Get daily steps statistics for the last N days."""
-        start_date = datetime.datetime.now() - datetime.timedelta(days=days)
+    def add_steps_with_timestamp(self, ring_id: int, value: int, timestamp: datetime.datetime) -> None:
+        """Add a steps reading with a specific timestamp."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
         
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT 
-                    date(timestamp) as date,
-                    MAX(value) as max_value
-                FROM steps
-                WHERE ring_id = ? AND timestamp >= ?
-                GROUP BY date(timestamp)
-                ORDER BY date DESC
-            """, (ring_id, start_date))
+        try:
+            cursor.execute(
+                "INSERT INTO steps (ring_id, value, timestamp) VALUES (?, ?, ?)",
+                (ring_id, value, timestamp)
+            )
+            conn.commit()
+            logger.debug(f"Added steps {value} for ring {ring_id} at {timestamp}")
+        except Exception as e:
+            logger.error(f"Error adding steps for ring {ring_id}: {e}")
+        finally:
+            conn.close()
             
-            return [dict(row) for row in cursor.fetchall()] 
+    def add_battery_with_timestamp(self, ring_id: int, value: int, timestamp: datetime.datetime) -> None:
+        """Add a battery reading with a specific timestamp."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute(
+                "INSERT INTO battery (ring_id, value, timestamp) VALUES (?, ?, ?)",
+                (ring_id, value, timestamp)
+            )
+            conn.commit()
+            logger.debug(f"Added battery {value}% for ring {ring_id} at {timestamp}")
+        except Exception as e:
+            logger.error(f"Error adding battery for ring {ring_id}: {e}")
+        finally:
+            conn.close() 

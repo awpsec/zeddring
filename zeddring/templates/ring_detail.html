@@ -6,6 +6,8 @@
     <title>{{ ring.name }} - Zeddring</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Auto-refresh the page every 30 seconds -->
+    <meta http-equiv="refresh" content="30">
 </head>
 <body>
     <header>
@@ -27,8 +29,8 @@
             <div class="ring-info-card">
                 <div class="ring-info">
                     <p><strong>MAC Address:</strong> {{ ring.mac_address }}</p>
-                    <p><strong>Battery Level:</strong> {{ ring.battery_level or 'Unknown' }}%</p>
-                    <p><strong>Last Seen:</strong> {{ ring.last_seen or 'Never' }}</p>
+                    <p><strong>Battery Level:</strong> {{ ring.battery_level or ring.latest_battery or 'Unknown' }}%</p>
+                    <p><strong>Last Seen:</strong> {{ ring.last_seen or ring.last_connected or 'Never' }}</p>
                 </div>
                 <div class="ring-actions">
                     {% if ring.connected %}
@@ -36,6 +38,8 @@
                     {% else %}
                         <button class="btn connect-btn" data-ring-id="{{ ring.id }}">Connect</button>
                     {% endif %}
+                    <button class="btn sync-btn" data-ring-id="{{ ring.id }}">Sync Data</button>
+                    <button class="btn set-time-btn" data-ring-id="{{ ring.id }}">Set Time</button>
                     <button class="btn reboot-btn" data-ring-id="{{ ring.id }}">Reboot</button>
                     <button class="btn rename-btn" data-ring-id="{{ ring.id }}" data-ring-name="{{ ring.name or '' }}">Rename</button>
                 </div>
@@ -128,94 +132,146 @@
             const ringId = {{ ring.id }};
             let heartRateChart = null;
             let stepsChart = null;
+            let batteryChart = null;
             
             // Initialize charts
             function initCharts() {
                 // Heart Rate Chart
-                const hrCtx = document.getElementById('heartRateChart').getContext('2d');
-                heartRateChart = new Chart(hrCtx, {
-                    type: 'line',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            label: 'Heart Rate',
-                            data: [],
-                            borderColor: 'rgb(255, 99, 132)',
-                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                            borderWidth: 2,
-                            fill: true,
-                            tension: 0.1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: {
-                                type: 'time',
-                                time: {
-                                    unit: 'hour',
-                                    displayFormats: {
-                                        hour: 'HH:mm'
+                const hrCtx = document.getElementById('heartRateChart');
+                if (hrCtx) {
+                    heartRateChart = new Chart(hrCtx.getContext('2d'), {
+                        type: 'line',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                label: 'Heart Rate',
+                                data: [],
+                                borderColor: 'rgb(255, 99, 132)',
+                                backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    type: 'time',
+                                    time: {
+                                        unit: 'hour',
+                                        displayFormats: {
+                                            hour: 'HH:mm'
+                                        }
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Time'
                                     }
                                 },
-                                title: {
-                                    display: true,
-                                    text: 'Time'
-                                }
-                            },
-                            y: {
-                                beginAtZero: false,
-                                title: {
-                                    display: true,
-                                    text: 'BPM'
+                                y: {
+                                    beginAtZero: false,
+                                    title: {
+                                        display: true,
+                                        text: 'BPM'
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                }
                 
                 // Steps Chart
-                const stepsCtx = document.getElementById('stepsChart').getContext('2d');
-                stepsChart = new Chart(stepsCtx, {
-                    type: 'bar',
-                    data: {
-                        labels: [],
-                        datasets: [{
-                            label: 'Steps',
-                            data: [],
-                            backgroundColor: 'rgba(54, 162, 235, 0.5)',
-                            borderColor: 'rgb(54, 162, 235)',
-                            borderWidth: 1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            x: {
-                                type: 'time',
-                                time: {
-                                    unit: 'day',
-                                    displayFormats: {
-                                        day: 'MMM d'
+                const stepsCtx = document.getElementById('stepsChart');
+                if (stepsCtx) {
+                    stepsChart = new Chart(stepsCtx.getContext('2d'), {
+                        type: 'bar',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                label: 'Steps',
+                                data: [],
+                                backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                                borderColor: 'rgb(54, 162, 235)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    type: 'time',
+                                    time: {
+                                        unit: 'day',
+                                        displayFormats: {
+                                            day: 'MMM d'
+                                        }
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Date'
                                     }
                                 },
-                                title: {
-                                    display: true,
-                                    text: 'Date'
-                                }
-                            },
-                            y: {
-                                beginAtZero: true,
-                                title: {
-                                    display: true,
-                                    text: 'Steps'
+                                y: {
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: 'Steps'
+                                    }
                                 }
                             }
                         }
-                    }
-                });
+                    });
+                }
+                
+                // Battery Chart
+                const batteryCtx = document.getElementById('batteryChart');
+                if (batteryCtx) {
+                    batteryChart = new Chart(batteryCtx.getContext('2d'), {
+                        type: 'line',
+                        data: {
+                            labels: [],
+                            datasets: [{
+                                label: 'Battery',
+                                data: [],
+                                borderColor: 'rgb(75, 192, 192)',
+                                backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                                borderWidth: 2,
+                                fill: true,
+                                tension: 0.1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                x: {
+                                    type: 'time',
+                                    time: {
+                                        unit: 'hour',
+                                        displayFormats: {
+                                            hour: 'HH:mm'
+                                        }
+                                    },
+                                    title: {
+                                        display: true,
+                                        text: 'Time'
+                                    }
+                                },
+                                y: {
+                                    beginAtZero: true,
+                                    max: 100,
+                                    title: {
+                                        display: true,
+                                        text: 'Battery %'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             }
             
             // Load data based on time range
@@ -249,6 +305,18 @@
                     .catch(error => {
                         console.error('Error loading steps data:', error);
                     });
+                    
+                // Load battery data
+                fetch(`/api/ring/${ringId}/data`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.data.battery_data) {
+                            updateBatteryChart(data.data.battery_data);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading battery data:', error);
+                    });
             }
             
             // Update heart rate chart
@@ -262,23 +330,6 @@
                 
                 heartRateChart.data.datasets[0].data = chartData;
                 heartRateChart.update();
-                
-                // Update current heart rate
-                if (chartData.length > 0) {
-                    document.getElementById('current-hr').textContent = chartData[0].y;
-                }
-                
-                // Calculate min, max, avg
-                if (chartData.length > 0) {
-                    const values = chartData.map(item => item.y);
-                    const min = Math.min(...values);
-                    const max = Math.max(...values);
-                    const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
-                    
-                    document.getElementById('min-hr').textContent = min;
-                    document.getElementById('max-hr').textContent = max;
-                    document.getElementById('avg-hr').textContent = avg;
-                }
             }
             
             // Update heart rate stats
@@ -299,9 +350,13 @@
                 
                 const avg = Math.round(totalAvg / totalCount);
                 
-                document.getElementById('min-hr').textContent = min === Infinity ? '--' : min;
-                document.getElementById('max-hr').textContent = max;
-                document.getElementById('avg-hr').textContent = isNaN(avg) ? '--' : avg;
+                const minHrElement = document.getElementById('min-hr');
+                const maxHrElement = document.getElementById('max-hr');
+                const avgHrElement = document.getElementById('avg-hr');
+                
+                if (minHrElement) minHrElement.textContent = min === Infinity ? '--' : min;
+                if (maxHrElement) maxHrElement.textContent = max;
+                if (avgHrElement) avgHrElement.textContent = isNaN(avg) ? '--' : avg;
             }
             
             // Update steps chart
@@ -315,22 +370,19 @@
                 
                 stepsChart.data.datasets[0].data = chartData;
                 stepsChart.update();
+            }
+            
+            // Update battery chart
+            function updateBatteryChart(data) {
+                if (!batteryChart) return;
                 
-                // Update steps stats
-                if (chartData.length > 0) {
-                    // Today's steps
-                    const today = new Date().toISOString().split('T')[0];
-                    const todayData = chartData.find(item => item.x.toISOString().split('T')[0] === today);
-                    document.getElementById('today-steps').textContent = todayData ? todayData.y : '0';
-                    
-                    // Average steps
-                    const totalSteps = chartData.reduce((sum, item) => sum + item.y, 0);
-                    const avgSteps = Math.round(totalSteps / chartData.length);
-                    document.getElementById('avg-steps').textContent = avgSteps;
-                    
-                    // Total steps
-                    document.getElementById('total-steps').textContent = totalSteps;
-                }
+                const chartData = data.map(item => ({
+                    x: new Date(item.timestamp),
+                    y: item.value
+                }));
+                
+                batteryChart.data.datasets[0].data = chartData;
+                batteryChart.update();
             }
             
             // Initialize
@@ -390,6 +442,59 @@
                 });
             }
             
+            // Sync Data Button
+            const syncBtn = document.querySelector('.sync-btn');
+            if (syncBtn) {
+                syncBtn.addEventListener('click', function() {
+                    if (!confirm('Sync historical data from the ring?')) {
+                        return;
+                    }
+                    
+                    fetch(`/api/ring/${ringId}/sync`, {
+                        method: 'POST'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('Historical data synced successfully. Refreshing page...');
+                            window.location.reload();
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('An error occurred while syncing data from the ring.');
+                    });
+                });
+            }
+            
+            // Set Time Button
+            const setTimeBtn = document.querySelector('.set-time-btn');
+            if (setTimeBtn) {
+                setTimeBtn.addEventListener('click', function() {
+                    if (!confirm('Set the time on the ring to match your server time?')) {
+                        return;
+                    }
+                    
+                    fetch(`/api/ring/${ringId}/set-time`, {
+                        method: 'POST'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert('Ring time set successfully.');
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('An error occurred while setting the time on the ring.');
+                    });
+                });
+            }
+            
             // Reboot Button
             const rebootBtn = document.querySelector('.reboot-btn');
             if (rebootBtn) {
@@ -425,52 +530,38 @@
             
             if (renameBtn) {
                 renameBtn.addEventListener('click', function() {
-                    modal.style.display = 'block';
-                });
-            }
-            
-            if (closeBtn) {
-                closeBtn.addEventListener('click', function() {
-                    modal.style.display = 'none';
-                });
-            }
-            
-            window.addEventListener('click', function(event) {
-                if (event.target == modal) {
-                    modal.style.display = 'none';
-                }
-            });
-            
-            if (renameForm) {
-                renameForm.addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    
-                    const newName = document.getElementById('new-name').value;
-                    
-                    fetch(`/api/ring/${ringId}/rename`, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            name: newName
+                    const newName = prompt('Enter a new name for the ring:', this.getAttribute('data-ring-name'));
+                    if (newName !== null && newName.trim() !== '') {
+                        fetch(`/api/ring/${ringId}/rename`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                name: newName.trim()
+                            })
                         })
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            modal.style.display = 'none';
-                            window.location.reload();
-                        } else {
-                            alert('Error: ' + data.error);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        alert('An error occurred while renaming the ring.');
-                    });
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.success) {
+                                window.location.reload();
+                            } else {
+                                alert('Error: ' + data.error);
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error:', error);
+                            alert('An error occurred while renaming the ring.');
+                        });
+                    }
                 });
             }
+            
+            // Auto-refresh data every 20 seconds
+            setInterval(function() {
+                const days = timeRangeSelect ? parseInt(timeRangeSelect.value) : 1;
+                loadData(days);
+            }, 20000);
         });
     </script>
 </body>

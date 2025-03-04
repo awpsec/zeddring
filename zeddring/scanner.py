@@ -4,6 +4,8 @@ import logging
 import subprocess
 import time
 import random
+import datetime
+import asyncio
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -50,10 +52,10 @@ def scan_for_devices(timeout: int = 10) -> List[ColmiDevice]:
         except Exception as e:
             logger.error(f"Error scanning with {method.__name__}: {e}")
     
-    # If no devices found with any method, return a mock device
+    # If no devices found with any method, return a mock device with a different MAC address
     if not devices:
         logger.warning("No devices found, returning mock device")
-        devices = [ColmiDevice(name="Mock Colmi R02", address="87:89:99:BC:B4:D5")]
+        devices = [ColmiDevice(name="Mock Colmi R02", address="00:11:22:33:44:55")]
     
     return devices
 
@@ -68,7 +70,6 @@ def scan_with_bleak(timeout: int = 10) -> List[ColmiDevice]:
         List of found Colmi devices
     """
     try:
-        import asyncio
         from bleak import BleakScanner
         
         async def scan():
@@ -179,9 +180,48 @@ class MockColmiR02Client:
         self.address = address
         self.connected = False
         self._battery = 75
-        self._steps = 1000
+        self._steps = 1100
         self._heart_rate = [70, 72, 75]
+        self._last_sync = datetime.datetime.now() - datetime.timedelta(hours=6)
+        self._historical_data = {
+            'steps_history': [],
+            'heart_rate_history': []
+        }
+        self._time_set = False
         
+        # Generate some historical data
+        self._generate_historical_data()
+        
+    def _generate_historical_data(self):
+        """Generate mock historical data."""
+        # Generate data for the past 24 hours
+        now = datetime.datetime.now()
+        for i in range(24):
+            timestamp = now - datetime.timedelta(hours=i)
+            
+            # Add steps data (increasing throughout the day)
+            steps_value = 5000 - (i * 200) + random.randint(-100, 100)
+            steps_value = max(0, steps_value)  # Ensure non-negative
+            
+            self._historical_data['steps_history'].append({
+                'timestamp': timestamp.isoformat(),
+                'value': steps_value
+            })
+            
+            # Add heart rate data (varying throughout the day)
+            base_hr = 70
+            if i < 8:  # Sleeping hours
+                base_hr = 60
+            elif i > 16:  # Evening activity
+                base_hr = 75
+                
+            hr_value = base_hr + random.randint(-5, 10)
+            
+            self._historical_data['heart_rate_history'].append({
+                'timestamp': timestamp.isoformat(),
+                'value': hr_value
+            })
+            
     async def connect(self):
         """Mock connect method."""
         logger.info(f"Mock connecting to {self.address}")
@@ -198,14 +238,18 @@ class MockColmiR02Client:
         """Mock get_battery method."""
         logger.info(f"Mock getting battery for {self.address}")
         # Simulate battery drain
-        self._battery = max(0, self._battery - 1)
+        self._battery = max(0, self._battery - random.randint(0, 2))
         return self._battery
             
     def get_steps(self):
         """Mock get_steps method."""
         logger.info(f"Mock getting steps for {self.address}")
-        # Simulate steps increasing
-        self._steps += 100
+        # Simulate steps increasing more realistically
+        time_since_last_sync = (datetime.datetime.now() - self._last_sync).total_seconds()
+        # Add 10-30 steps per minute on average
+        steps_to_add = int((time_since_last_sync / 60) * random.randint(10, 30))
+        self._steps += steps_to_add
+        self._last_sync = datetime.datetime.now()
         return self._steps
             
     def get_real_time_heart_rate(self):
@@ -224,4 +268,23 @@ class MockColmiR02Client:
         # Simulate heart rate fluctuations
         hr = max(60, min(100, self._heart_rate[0] + random.randint(-5, 5)))
         self._heart_rate[0] = hr
-        return hr 
+        return hr
+        
+    async def get_historical_data(self):
+        """Mock get_historical_data method."""
+        logger.info(f"Mock getting historical data for {self.address}")
+        return self._historical_data
+        
+    async def set_time(self, current_time):
+        """Mock set_time method."""
+        logger.info(f"Mock setting time for {self.address} to {current_time}")
+        self._time_set = True
+        return True
+        
+    async def reboot(self):
+        """Mock reboot method."""
+        logger.info(f"Mock rebooting {self.address}")
+        self.connected = False
+        # Simulate reboot time
+        await asyncio.sleep(2)
+        return True 

@@ -19,10 +19,11 @@ services:
       - NET_RAW
     environment:
       - ZEDDRING_DB_PATH=/data/zeddring_data.sqlite
-      - ZEDDRING_SCAN_INTERVAL=60
+      - ZEDDRING_SCAN_INTERVAL=20
       - ZEDDRING_SCAN_TIMEOUT=10
       - ZEDDRING_MAX_RETRY_ATTEMPTS=3
       - ZEDDRING_RETRY_DELAY=300
       - ZEDDRING_WEB_HOST=0.0.0.0
       - ZEDDRING_WEB_PORT=5000
-      - ZEDDRING_DEBUG=False 
+      - ZEDDRING_DEBUG=False
+      - ZEDDRING_PERSISTENT_CONNECTION=True 

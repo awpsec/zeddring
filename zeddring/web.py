@@ -258,6 +258,107 @@ def get_daily_data(ring_id):
         "data": daily_data
     })
 
+@app.route('/api/ring/<int:ring_id>/rename', methods=['POST'])
+def rename_ring(ring_id):
+    """Rename a ring."""
+    database = current_app.config.get('DATABASE')
+    if not database:
+        return jsonify({"error": "Database not available"}), 500
+        
+    # Get the new name from the request
+    data = request.get_json()
+    if not data or 'name' not in data:
+        return jsonify({"success": False, "error": "Name is required"}), 400
+        
+    new_name = data['name']
+    if not new_name or not new_name.strip():
+        return jsonify({"success": False, "error": "Name cannot be empty"}), 400
+    
+    # Get the ring
+    ring = database.get_ring(ring_id)
+    if not ring:
+        return jsonify({"success": False, "error": "Ring not found"}), 404
+        
+    # Update the ring name
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE rings SET name = ? WHERE id = ?", (new_name, ring_id))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error(f"Error renaming ring {ring_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/ring/<int:ring_id>/sync', methods=['POST'])
+def sync_ring_data(ring_id):
+    """Sync historical data from a ring."""
+    ring_manager = current_app.config.get('RING_MANAGER')
+    if not ring_manager:
+        return jsonify({"error": "Ring manager not available"}), 500
+        
+    # Check if the ring exists
+    ring = ring_manager.db.get_ring(ring_id)
+    if not ring:
+        return jsonify({"success": False, "error": "Ring not found"}), 404
+        
+    # Check if the ring is connected
+    if ring_id not in ring_manager.rings or not ring_manager.rings[ring_id].connected:
+        return jsonify({"success": False, "error": "Ring is not connected"}), 400
+        
+    try:
+        # Create a new event loop for this request
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Sync historical data
+        loop.run_until_complete(ring_manager.rings[ring_id].sync_historical_data())
+        
+        # Close the loop
+        loop.close()
+        
+        return jsonify({"success": True, "message": "Historical data synced successfully"})
+    except Exception as e:
+        logger.error(f"Error syncing historical data for ring {ring_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/ring/<int:ring_id>/set-time', methods=['POST'])
+def set_ring_time(ring_id):
+    """Set the time on a ring."""
+    ring_manager = current_app.config.get('RING_MANAGER')
+    if not ring_manager:
+        return jsonify({"error": "Ring manager not available"}), 500
+        
+    # Check if the ring exists
+    ring = ring_manager.db.get_ring(ring_id)
+    if not ring:
+        return jsonify({"success": False, "error": "Ring not found"}), 404
+        
+    # Check if the ring is connected
+    if ring_id not in ring_manager.rings or not ring_manager.rings[ring_id].connected:
+        return jsonify({"success": False, "error": "Ring is not connected"}), 400
+        
+    try:
+        # Create a new event loop for this request
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Set the time on the ring
+        success = loop.run_until_complete(ring_manager.rings[ring_id].set_ring_time())
+        
+        # Close the loop
+        loop.close()
+        
+        if success:
+            return jsonify({"success": True, "message": "Ring time set successfully"})
+        else:
+            return jsonify({"success": False, "error": "Failed to set ring time"}), 500
+    except Exception as e:
+        logger.error(f"Error setting time for ring {ring_id}: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 # Custom Jinja2 filter for JSON serialization
 @app.template_filter('tojson')
 def to_json(value):
