@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
 import time
 import subprocess
 import json

@@ -5,21 +5,10 @@ import logging
 import threading
 import asyncio
 from typing import Dict, List, Optional, Callable, Any
-import datetime
+from datetime import datetime
 import json
 import os
 import sqlite3
-
-try:
-    from colmi_r02_client import Client
-    from colmi_r02_client.client import Client as ColmiClient
-except ImportError:
-    logging.error("Could not import colmi_r02_client. Make sure it's installed correctly.")
-    raise
-
-from zeddring.config import SCAN_INTERVAL, SCAN_TIMEOUT, MAX_RETRY_ATTEMPTS, RETRY_DELAY
-from zeddring.database import Database, get_db_connection, init_db
-from zeddring.scanner import scan_for_devices
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +16,32 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("zeddring.ring_manager")
+
+# Try to import the colmi_r02_client package
+try:
+    from colmi_r02_client import Client
+    from colmi_r02_client.client import Client as ColmiClient
+    COLMI_CLIENT_AVAILABLE = True
+except ImportError:
+    logger.warning("colmi_r02_client not available, using mock client")
+    COLMI_CLIENT_AVAILABLE = False
+    ColmiClient = None
+
+# Import our custom scanner
+from zeddring.scanner import scan_for_devices
+
+# Import database functions
+from zeddring.database import get_db_connection, init_db
+
+# Import config
+try:
+    from zeddring.config import SCAN_INTERVAL, SCAN_TIMEOUT, MAX_RETRY_ATTEMPTS, RETRY_DELAY
+except ImportError:
+    # Default values if config is not available
+    SCAN_INTERVAL = 60
+    SCAN_TIMEOUT = 10
+    MAX_RETRY_ATTEMPTS = 3
+    RETRY_DELAY = 300
 
 class MockClient:
     """Mock client for testing when colmi_r02_client is not available."""
@@ -452,7 +467,7 @@ class RingManager:
             # Calculate daily stats
             avg_heart_rate = sum(heart_rates) / len(heart_rates) if heart_rates else 0
             max_heart_rate = max(heart_rates) if heart_rates else 0
-            min_heart_rate = min(hr for hr in heart_rates if hr > 0) if heart_rates else 0
+            min_heart_rate = min([hr for hr in heart_rates if hr > 0]) if heart_rates else 0
             last_steps = steps_data[-1] if steps_data else 0
             last_battery = battery_levels[-1] if battery_levels else 0
             
