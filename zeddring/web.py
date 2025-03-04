@@ -11,8 +11,8 @@ from flask import Flask, render_template, request, jsonify, redirect, url_for, a
 from flask_cors import CORS
 
 from zeddring.config import WEB_HOST, WEB_PORT, DEBUG
-from zeddring.database import Database
-from zeddring.ring_manager import RingManager, get_ring_manager
+from zeddring.database import Database, get_db_connection
+from zeddring.ring_manager import RingManager, get_ring_manager, Ring
 
 # Configure logging
 logging.basicConfig(
@@ -179,16 +179,22 @@ def disconnect_ring(ring_id):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
-    # Disconnect from the ring
+    # Disconnect from the ring using our updated method
     success = loop.run_until_complete(ring_manager.disconnect_ring(ring_id))
     
     # Close the loop
     loop.close()
     
-    return jsonify({
-        "success": success,
-        "error": "Failed to disconnect from ring" if not success else None
-    })
+    if success:
+        return jsonify({
+            "success": True,
+            "message": "Successfully disconnected from ring"
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to disconnect from ring"
+        }), 500
 
 @app.route('/api/ring/<int:ring_id>/data', methods=['GET'])
 def get_ring_data(ring_id):
@@ -329,46 +335,26 @@ def sync_ring_data(ring_id):
     if not ring_manager:
         return jsonify({"error": "Ring manager not available"}), 500
         
-    # Check if the ring exists
-    ring = ring_manager.db.get_ring(ring_id)
-    if not ring:
-        return jsonify({"success": False, "error": "Ring not found"}), 404
-        
-    # Check if the ring is connected
-    # The RingManager doesn't have a 'rings' attribute, so we need to check the connected_rings
-    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
-    if not mac_address or mac_address not in ring_manager.connected_rings or not ring_manager.connected_rings[mac_address]:
-        return jsonify({"success": False, "error": "Ring is not connected"}), 400
-        
-    try:
-        # Create a new event loop for this request
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Sync historical data - we need to create a Ring object
-        client = ring_manager.clients.get(mac_address)
-        if not client:
-            return jsonify({"success": False, "error": "Client not found for ring"}), 500
-            
-        # Create a temporary Ring object to sync data
-        temp_ring = Ring(ring_id, ring['name'] if 'name' in ring.keys() else 'Unknown', mac_address)
-        temp_ring.client = client
-        temp_ring.connected = True
-        temp_ring.db = ring_manager.db
-        
-        # Sync historical data
-        success = loop.run_until_complete(temp_ring.sync_historical_data())
-        
-        # Close the loop
-        loop.close()
-        
-        if success:
-            return jsonify({"success": True, "message": "Historical data synced successfully"})
-        else:
-            return jsonify({"success": False, "error": "Failed to sync historical data"}), 500
-    except Exception as e:
-        logger.error(f"Error syncing historical data for ring {ring_id}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    # Create a new event loop for this request
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Sync historical data using our new method
+    success = loop.run_until_complete(ring_manager.sync_historical_data_for_ring(ring_id))
+    
+    # Close the loop
+    loop.close()
+    
+    if success:
+        return jsonify({
+            "success": True,
+            "message": "Historical data synced successfully"
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to sync historical data"
+        }), 500
 
 @app.route('/api/ring/<int:ring_id>/set-time', methods=['POST'])
 def set_ring_time(ring_id):
@@ -463,46 +449,27 @@ def reboot_ring(ring_id):
     ring_manager = current_app.config.get('RING_MANAGER')
     if not ring_manager:
         return jsonify({"success": False, "error": "Ring manager not available"}), 500
-        
-    # Check if the ring exists
-    ring = ring_manager.db.get_ring(ring_id)
-    if not ring:
-        return jsonify({"success": False, "error": "Ring not found"}), 404
-        
-    # Check if the ring is connected
-    # The RingManager doesn't have a 'rings' attribute, so we need to check the connected_rings
-    mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
-    if not mac_address or mac_address not in ring_manager.connected_rings or not ring_manager.connected_rings[mac_address]:
-        return jsonify({"success": False, "error": "Ring is not connected"}), 400
-        
-    try:
-        # Create a new event loop for this request
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        # Get the client
-        client = ring_manager.clients.get(mac_address)
-        if not client:
-            return jsonify({"success": False, "error": "Client not found for ring"}), 500
-            
-        # Create a temporary Ring object to reboot
-        temp_ring = Ring(ring_id, ring['name'] if 'name' in ring.keys() else 'Unknown', mac_address)
-        temp_ring.client = client
-        temp_ring.connected = True
-        
-        # Reboot the ring
-        success = loop.run_until_complete(temp_ring.reboot())
-        
-        # Close the loop
-        loop.close()
-        
-        if success:
-            return jsonify({"success": True, "message": "Ring is rebooting"})
-        else:
-            return jsonify({"success": False, "error": "Failed to reboot ring"}), 500
-    except Exception as e:
-        logger.error(f"Error rebooting ring {ring_id}: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+    
+    # Create a new event loop for this request
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
+    # Reboot the ring using our new method
+    success = loop.run_until_complete(ring_manager.reboot_ring(ring_id))
+    
+    # Close the loop
+    loop.close()
+    
+    if success:
+        return jsonify({
+            "success": True,
+            "message": "Ring is rebooting"
+        })
+    else:
+        return jsonify({
+            "success": False,
+            "error": "Failed to reboot ring"
+        }), 500
 
 # Custom Jinja2 filter for JSON serialization
 @app.template_filter('tojson')

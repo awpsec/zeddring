@@ -507,11 +507,6 @@ class RingManager:
     def _connect_to_ring(self, mac_address: str, ring_id: int) -> bool:
         """Connect to a ring and keep the connection open."""
         try:
-            # Skip if already connected
-            if mac_address in self.clients:
-                logger.info(f"Already connected to {mac_address}")
-                return True
-                
             # Get ring info from database
             ring_info = self.db.get_ring(ring_id)
             if not ring_info:
@@ -521,6 +516,31 @@ class RingManager:
             # Handle sqlite3.Row objects which don't have a get method
             ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
             is_mock = ring_info['is_mock'] if 'is_mock' in ring_info.keys() else 0
+            
+            # Check if already connected
+            if mac_address in self.clients:
+                # Check if the connection is still valid
+                client = self.clients[mac_address]
+                if hasattr(client, 'connected') and client.connected:
+                    logger.info(f"Already connected to {mac_address}")
+                    return True
+                else:
+                    # Connection is no longer valid, remove it and reconnect
+                    logger.info(f"Connection to {mac_address} is no longer valid, reconnecting...")
+                    try:
+                        # Try to disconnect cleanly
+                        if hasattr(client, 'disconnect'):
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(client.disconnect())
+                            loop.close()
+                    except Exception as e:
+                        logger.warning(f"Error disconnecting from {mac_address}: {e}")
+                    
+                    # Remove the client
+                    del self.clients[mac_address]
+                    if mac_address in self.connected_rings:
+                        del self.connected_rings[mac_address]
             
             # Check if this is a valid MAC address (should be in format like 00:11:22:33:44:55)
             is_valid_mac = bool(re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', mac_address))
@@ -876,18 +896,43 @@ class RingManager:
         try:
             ring = self.db.get_ring(ring_id)
             if not ring:
+                logger.error(f"Ring {ring_id} not found in database")
+                return False
+                
+            mac_address = ring['mac_address'] if 'mac_address' in ring.keys() else None
+            if not mac_address:
+                logger.error(f"Ring {ring_id} has no MAC address")
                 return False
                 
             # Skip if not connected
-            if ring['mac_address'] not in self.clients:
+            if mac_address not in self.clients:
+                logger.info(f"Ring {ring_id} ({mac_address}) is not connected")
                 return True
                 
             # Disconnect
-            client = self.clients[ring['mac_address']]
-            await client.disconnect()
+            client = self.clients[mac_address]
+            logger.info(f"Disconnecting from ring {ring_id} ({mac_address})...")
             
-            # Remove from clients
-            del self.clients[ring['mac_address']]
+            try:
+                # Check if disconnect is a coroutine function
+                if asyncio.iscoroutinefunction(client.disconnect):
+                    await client.disconnect()
+                else:
+                    # For non-async disconnect methods
+                    client.disconnect()
+                
+                logger.info(f"Successfully disconnected from ring {ring_id} ({mac_address})")
+            except Exception as e:
+                logger.error(f"Error during disconnect operation: {e}")
+                # Continue with cleanup even if disconnect fails
+            
+            # Remove from clients and update database
+            del self.clients[mac_address]
+            if mac_address in self.connected_rings:
+                del self.connected_rings[mac_address]
+            
+            # Update connection status in database
+            self.db.update_ring_disconnection(ring_id)
             
             return True
         except Exception as e:
@@ -929,6 +974,170 @@ class RingManager:
             return True
         except Exception as e:
             logger.error(f"Error saving ring data for {ring_id}: {e}")
+            return False
+
+    async def reboot_ring(self, ring_id: int) -> bool:
+        """Reboot a ring."""
+        try:
+            # Get ring info from database
+            ring_info = self.db.get_ring(ring_id)
+            if not ring_info:
+                logger.error(f"Ring {ring_id} not found in database")
+                return False
+            
+            # Handle sqlite3.Row objects which don't have a get method
+            mac_address = ring_info['mac_address'] if 'mac_address' in ring_info.keys() else None
+            ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
+            
+            if not mac_address:
+                logger.error(f"Ring {ring_id} has no MAC address")
+                return False
+                
+            # Check if the ring is connected
+            if mac_address not in self.clients:
+                logger.error(f"Ring {ring_id} ({mac_address}) is not connected")
+                return False
+                
+            # Get the client
+            client = self.clients[mac_address]
+            logger.info(f"Rebooting ring {ring_id} ({mac_address})...")
+            
+            # Reboot the ring
+            try:
+                # Check if reboot is a coroutine function
+                if asyncio.iscoroutinefunction(client.reboot):
+                    await client.reboot()
+                else:
+                    # For non-async reboot methods
+                    client.reboot()
+                
+                logger.info(f"Successfully rebooted ring {ring_id} ({mac_address})")
+                
+                # Remove from clients since connection will be lost after reboot
+                del self.clients[mac_address]
+                if mac_address in self.connected_rings:
+                    del self.connected_rings[mac_address]
+                
+                # Update connection status in database
+                self.db.update_ring_disconnection(ring_id)
+                
+                return True
+            except Exception as e:
+                logger.error(f"Error during reboot operation: {e}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error rebooting ring {ring_id}: {e}")
+            return False
+
+    async def sync_historical_data_for_ring(self, ring_id: int) -> bool:
+        """Sync historical data for a specific ring."""
+        try:
+            # Get ring info from database
+            ring_info = self.db.get_ring(ring_id)
+            if not ring_info:
+                logger.error(f"Ring {ring_id} not found in database")
+                return False
+            
+            # Handle sqlite3.Row objects which don't have a get method
+            mac_address = ring_info['mac_address'] if 'mac_address' in ring_info.keys() else None
+            ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
+            
+            if not mac_address:
+                logger.error(f"Ring {ring_id} has no MAC address")
+                return False
+                
+            # Check if the ring is connected
+            if mac_address not in self.clients:
+                logger.error(f"Ring {ring_id} ({mac_address}) is not connected, attempting to connect...")
+                # Try to connect to the ring first
+                connected = await self.connect_ring(ring_id)
+                if not connected:
+                    logger.error(f"Failed to connect to ring {ring_id} ({mac_address})")
+                    return False
+            
+            # Get the client
+            client = self.clients[mac_address]
+            logger.info(f"Syncing historical data for ring {ring_id} ({mac_address})...")
+            
+            # Check if the client supports get_historical_data
+            if not hasattr(client, 'get_historical_data'):
+                logger.error(f"Client for ring {ring_id} does not support get_historical_data")
+                return False
+            
+            # Sync historical data
+            try:
+                # Get historical data
+                if asyncio.iscoroutinefunction(client.get_historical_data):
+                    historical_data = await client.get_historical_data()
+                else:
+                    historical_data = client.get_historical_data()
+                
+                if not historical_data:
+                    logger.warning(f"No historical data returned for ring {ring_id}")
+                    return False
+                
+                logger.info(f"Received historical data for ring {ring_id}")
+                
+                synced_data = False
+                
+                # Process steps history
+                if 'steps_history' in historical_data and historical_data['steps_history']:
+                    steps_count = 0
+                    for entry in historical_data['steps_history']:
+                        timestamp = entry.get('timestamp')
+                        steps = entry.get('value')
+                        if timestamp and steps:
+                            # Convert timestamp to datetime if needed
+                            if isinstance(timestamp, str):
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp)
+                                except ValueError:
+                                    # Try different format if isoformat fails
+                                    timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                            # Add to database with specific timestamp
+                            self.db.add_steps_with_timestamp(ring_id, steps, timestamp)
+                            steps_count += 1
+                    logger.info(f"Synced {steps_count} steps entries for ring {ring_id}")
+                    if steps_count > 0:
+                        synced_data = True
+                
+                # Process heart rate history
+                if 'heart_rate_history' in historical_data and historical_data['heart_rate_history']:
+                    hr_count = 0
+                    for entry in historical_data['heart_rate_history']:
+                        timestamp = entry.get('timestamp')
+                        heart_rate = entry.get('value')
+                        if timestamp and heart_rate:
+                            # Convert timestamp to datetime if needed
+                            if isinstance(timestamp, str):
+                                try:
+                                    timestamp = datetime.fromisoformat(timestamp)
+                                except ValueError:
+                                    # Try different format if isoformat fails
+                                    timestamp = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S")
+                            # Add to database with specific timestamp
+                            self.db.add_heart_rate_with_timestamp(ring_id, heart_rate, timestamp)
+                            hr_count += 1
+                    logger.info(f"Synced {hr_count} heart rate entries for ring {ring_id}")
+                    if hr_count > 0:
+                        synced_data = True
+                
+                # Update the last sync time in the database
+                if synced_data:
+                    self.db.update_last_sync(ring_id)
+                    logger.info(f"Historical data sync completed for ring {ring_id}")
+                    return True
+                else:
+                    logger.warning(f"No data was synced for ring {ring_id}")
+                    return False
+                
+            except Exception as e:
+                logger.error(f"Error syncing historical data for ring {ring_id}: {e}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in sync_historical_data_for_ring for ring {ring_id}: {e}")
             return False
 
 # Singleton instance

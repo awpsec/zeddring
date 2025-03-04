@@ -82,18 +82,28 @@ class HeartRateLogger:
                         except Exception as e:
                             logger.error(f"Error getting heart rate for ring {ring['id']}: {e}")
                             
-                        # Get steps directly from the client
+                        # Get steps directly from the client - properly handle async method
                         try:
-                            steps = client.get_steps()
+                            # Check if get_steps is a coroutine function
+                            if asyncio.iscoroutinefunction(client.get_steps):
+                                steps = loop.run_until_complete(client.get_steps())
+                            else:
+                                steps = client.get_steps()
+                                
                             if steps and steps > 0:
                                 self.db.add_steps(ring['id'], steps)
                                 logger.info(f"Logged steps {steps} for ring {ring['id']}")
                         except Exception as e:
                             logger.error(f"Error getting steps for ring {ring['id']}: {e}")
                             
-                        # Get battery directly from the client
+                        # Get battery directly from the client - properly handle async method
                         try:
-                            battery = client.get_battery()
+                            # Check if get_battery is a coroutine function
+                            if asyncio.iscoroutinefunction(client.get_battery):
+                                battery = loop.run_until_complete(client.get_battery())
+                            else:
+                                battery = client.get_battery()
+                                
                             if battery is not None:
                                 self.db.add_battery(ring['id'], battery)
                                 logger.info(f"Logged battery {battery}% for ring {ring['id']}")

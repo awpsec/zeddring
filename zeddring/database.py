@@ -152,12 +152,17 @@ class Database:
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        cursor.execute(
-            "UPDATE rings SET last_connected = ? WHERE id = ?",
-            (datetime.datetime.now(), ring_id)
-        )
-        conn.commit()
-        conn.close()
+        try:
+            cursor.execute(
+                "UPDATE rings SET connected = 1, last_connected = CURRENT_TIMESTAMP WHERE id = ?",
+                (datetime.datetime.now(), ring_id)
+            )
+            conn.commit()
+            logger.info(f"Updated connection status for ring {ring_id} to connected")
+        except Exception as e:
+            logger.error(f"Error updating connection status for ring {ring_id}: {e}")
+        finally:
+            conn.close()
     
     def get_rings(self):
         """Get all rings from the database."""
@@ -523,5 +528,22 @@ class Database:
             logger.info(f"Updated ring {ring_id} with data: {data}")
         except Exception as e:
             logger.error(f"Error updating ring {ring_id}: {e}")
+        finally:
+            conn.close()
+
+    def update_ring_disconnection(self, ring_id):
+        """Update the database when a ring is disconnected."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute(
+                "UPDATE rings SET connected = 0, last_disconnected = CURRENT_TIMESTAMP WHERE id = ?",
+                (ring_id,)
+            )
+            conn.commit()
+            logger.info(f"Updated connection status for ring {ring_id} to disconnected")
+        except Exception as e:
+            logger.error(f"Error updating disconnection status for ring {ring_id}: {e}")
         finally:
             conn.close() 
