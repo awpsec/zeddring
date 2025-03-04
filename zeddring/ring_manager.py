@@ -6,11 +6,15 @@ import threading
 from typing import Dict, List, Optional, Callable, Any
 import datetime
 
-from colmi_r02_client.client import Client
-from colmi_r02_client.scanner import scan_for_devices
+try:
+    from colmi_r02_client.client import Client
+except ImportError:
+    logging.error("Could not import colmi_r02_client. Make sure it's installed correctly.")
+    raise
 
 from zeddring.config import SCAN_INTERVAL, SCAN_TIMEOUT, MAX_RETRY_ATTEMPTS, RETRY_DELAY
 from zeddring.database import Database
+from zeddring.scanner import scan_for_rings
 
 # Configure logging
 logging.basicConfig(
@@ -82,7 +86,7 @@ class RingManager:
         while self.running:
             try:
                 logger.info("Scanning for rings...")
-                devices = scan_for_devices(timeout=SCAN_TIMEOUT)
+                devices = scan_for_rings(timeout=SCAN_TIMEOUT)
                 
                 for device in devices:
                     mac_address = device.address
