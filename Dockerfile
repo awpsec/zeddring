@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     bluetooth \
     libbluetooth-dev \
     git \
+    libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
 
 # Create bluetooth group and set permissions
