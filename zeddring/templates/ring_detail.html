@@ -11,7 +11,12 @@
 </head>
 <body>
     <header>
-        <h1>{{ ring.name }}</h1>
+        <h1>
+            {{ ring.name }}
+            <div class="battery-indicator">
+                <div class="battery-level" id="battery-level-indicator" style="width: {{ ring.battery_level or ring.latest_battery or 0 }}%"></div>
+            </div>
+        </h1>
         <nav>
             <a href="{{ url_for('index') }}" class="button">Back to Dashboard</a>
         </nav>
@@ -19,14 +24,14 @@
     
     <main>
         <section class="ring-detail">
-            <div class="ring-header">
+            <div class="ring-header glass-card">
                 <h2>{{ ring.name or 'Unnamed Ring' }}</h2>
                 <div class="ring-status {% if ring.connected %}connected{% else %}disconnected{% endif %}">
                     {% if ring.connected %}Connected{% else %}Disconnected{% endif %}
                 </div>
             </div>
             
-            <div class="ring-info-card">
+            <div class="ring-info-card glass-card">
                 <div class="ring-info">
                     <p><strong>MAC Address:</strong> {{ ring.mac_address }}</p>
                     <p><strong>Battery Level:</strong> {{ ring.battery_level or ring.latest_battery or 'Unknown' }}%</p>
@@ -45,7 +50,7 @@
                 </div>
             </div>
             
-            <div class="data-controls">
+            <div class="data-controls glass-card">
                 <div class="time-range">
                     <label for="time-range">Time Range:</label>
                     <select id="time-range">
@@ -58,7 +63,7 @@
             </div>
             
             <div class="data-cards">
-                <div class="card">
+                <div class="card heart-rate glass-card">
                     <h3>Heart Rate</h3>
                     {% if ring.latest_heart_rate is defined %}
                         <div class="current-value">{{ ring.latest_heart_rate }} BPM</div>
@@ -90,34 +95,36 @@
                     {% endif %}
                 </div>
                 
-                <div class="card">
-                    <h3>Steps</h3>
-                    {% if ring.latest_steps is defined %}
-                        <div class="current-value">{{ ring.latest_steps }}</div>
-                        
-                        {% if ring.steps_data %}
-                            <div class="chart-container">
-                                <canvas id="stepsChart"></canvas>
-                            </div>
+                <div class="small-cards-container">
+                    <div class="card steps glass-card">
+                        <h3>Steps</h3>
+                        {% if ring.latest_steps is defined %}
+                            <div class="current-value">{{ ring.latest_steps }}</div>
+                            
+                            {% if ring.steps_data %}
+                                <div class="chart-container">
+                                    <canvas id="stepsChart"></canvas>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <p class="no-data">No steps data available</p>
                         {% endif %}
-                    {% else %}
-                        <p class="no-data">No steps data available</p>
-                    {% endif %}
-                </div>
-                
-                <div class="card">
-                    <h3>Battery</h3>
-                    {% if ring.latest_battery is defined %}
-                        <div class="current-value">{{ ring.latest_battery }}%</div>
-                        
-                        {% if ring.battery_data %}
-                            <div class="chart-container">
-                                <canvas id="batteryChart"></canvas>
-                            </div>
+                    </div>
+                    
+                    <div class="card battery glass-card">
+                        <h3>Battery</h3>
+                        {% if ring.latest_battery is defined %}
+                            <div class="current-value">{{ ring.latest_battery }}%</div>
+                            
+                            {% if ring.battery_data %}
+                                <div class="chart-container">
+                                    <canvas id="batteryChart"></canvas>
+                                </div>
+                            {% endif %}
+                        {% else %}
+                            <p class="no-data">No battery data available</p>
                         {% endif %}
-                    {% else %}
-                        <p class="no-data">No battery data available</p>
-                    {% endif %}
+                    </div>
                 </div>
             </div>
         </section>
@@ -133,6 +140,32 @@
             let heartRateChart = null;
             let stepsChart = null;
             let batteryChart = null;
+            
+            // Update battery indicator
+            function updateBatteryIndicator(level) {
+                const batteryLevel = document.getElementById('battery-level-indicator');
+                if (!batteryLevel) return;
+                
+                batteryLevel.style.width = level + '%';
+                
+                // Remove all classes
+                batteryLevel.classList.remove('high', 'medium', 'low', 'critical');
+                
+                // Add appropriate class based on level
+                if (level >= 75) {
+                    batteryLevel.classList.add('high');
+                } else if (level >= 50) {
+                    batteryLevel.classList.add('medium');
+                } else if (level >= 25) {
+                    batteryLevel.classList.add('low');
+                } else {
+                    batteryLevel.classList.add('critical');
+                }
+            }
+            
+            // Initialize battery indicator
+            const initialBatteryLevel = {{ ring.battery_level or ring.latest_battery or 0 }};
+            updateBatteryIndicator(initialBatteryLevel);
             
             // Initialize charts
             function initCharts() {
@@ -312,6 +345,11 @@
                     .then(data => {
                         if (data.success && data.data.battery_data) {
                             updateBatteryChart(data.data.battery_data);
+                            
+                            // Update battery indicator if latest data is available
+                            if (data.data.latest_battery) {
+                                updateBatteryIndicator(data.data.latest_battery);
+                            }
                         }
                     })
                     .catch(error => {
@@ -383,6 +421,12 @@
                 
                 batteryChart.data.datasets[0].data = chartData;
                 batteryChart.update();
+                
+                // Update battery indicator with latest value if available
+                if (chartData.length > 0) {
+                    const latestBattery = chartData[chartData.length - 1].y;
+                    updateBatteryIndicator(latestBattery);
+                }
             }
             
             // Initialize

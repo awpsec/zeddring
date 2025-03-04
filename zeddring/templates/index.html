@@ -30,8 +30,15 @@
             {% if rings %}
                 <div class="ring-grid">
                     {% for ring in rings %}
-                        <div class="ring-card">
-                            <h3>{{ ring.name }}</h3>
+                        <div class="ring-card glass-card">
+                            <h3>
+                                {{ ring.name }}
+                                {% if ring.battery is defined %}
+                                <div class="battery-indicator">
+                                    <div class="battery-level {% if ring.battery >= 75 %}high{% elif ring.battery >= 50 %}medium{% elif ring.battery >= 25 %}low{% else %}critical{% endif %}" style="width: {{ ring.battery }}%;"></div>
+                                </div>
+                                {% endif %}
+                            </h3>
                             <div class="ring-status">
                                 <span class="status-indicator {% if ring.connected %}connected{% else %}disconnected{% endif %}"></span>
                                 <span class="status-text">{{ 'Connected' if ring.connected else 'Disconnected' }}</span>

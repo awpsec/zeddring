@@ -195,28 +195,9 @@ async def scan_for_devices(timeout: int = 10) -> List[Dict[str, Any]]:
     colmi_devices = [device for device in all_devices if is_colmi_device(device)]
     logger.info(f"Found {len(colmi_devices)} Colmi devices out of {len(all_devices)} total devices")
     
-    # If no devices found, check if we already have a mock device in the database
+    # If no devices found, log a warning but don't add a mock device
     if not colmi_devices:
         logger.warning("No Colmi devices found during scan")
-        
-        # Check if we already have a mock device in the database
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM rings WHERE mac_address = ?", ("00:11:22:33:44:55",))
-        existing_mock = cursor.fetchone()
-        conn.close()
-        
-        if existing_mock:
-            logger.warning("Mock device already exists in database, not adding another one")
-        else:
-            logger.warning("Adding mock device as fallback")
-            mock_device = {
-                "address": "00:11:22:33:44:55",
-                "name": "Mock Colmi Ring",
-                "rssi": -50,
-                "is_mock": True
-            }
-            colmi_devices.append(mock_device)
     
     return colmi_devices
 
