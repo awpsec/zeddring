@@ -10,6 +10,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -235,13 +236,23 @@ class Ring:
     async def sync_historical_data(self):
         """Sync historical data from the ring."""
         if not self.client or not hasattr(self.client, 'get_historical_data'):
-            return
+            logger.error(f"Client for ring {self.id} does not support get_historical_data")
+            return False
             
         try:
             logger.info(f"Syncing historical data for ring {self.id}")
             historical_data = await self.client.get_historical_data()
             
+            if not historical_data:
+                logger.warning(f"No historical data returned for ring {self.id}")
+                return False
+                
+            logger.info(f"Received historical data: {historical_data}")
+            
+            synced_data = False
+            
             if historical_data and 'steps_history' in historical_data:
+                steps_count = 0
                 for entry in historical_data['steps_history']:
                     timestamp = entry.get('timestamp')
                     steps = entry.get('value')
@@ -251,8 +262,13 @@ class Ring:
                             timestamp = datetime.fromisoformat(timestamp)
                         # Add to database with specific timestamp
                         self.db.add_steps_with_timestamp(self.id, steps, timestamp)
+                        steps_count += 1
+                logger.info(f"Synced {steps_count} steps entries for ring {self.id}")
+                if steps_count > 0:
+                    synced_data = True
                         
             if historical_data and 'heart_rate_history' in historical_data:
+                hr_count = 0
                 for entry in historical_data['heart_rate_history']:
                     timestamp = entry.get('timestamp')
                     heart_rate = entry.get('value')
@@ -262,12 +278,19 @@ class Ring:
                             timestamp = datetime.fromisoformat(timestamp)
                         # Add to database with specific timestamp
                         self.db.add_heart_rate_with_timestamp(self.id, heart_rate, timestamp)
+                        hr_count += 1
+                logger.info(f"Synced {hr_count} heart rate entries for ring {self.id}")
+                if hr_count > 0:
+                    synced_data = True
             
             # Update the last sync time in the database
-            self.db.update_last_sync(self.id)
-                        
-            logger.info(f"Historical data sync completed for ring {self.id}")
-            return True
+            if synced_data:
+                self.db.update_last_sync(self.id)
+                logger.info(f"Historical data sync completed for ring {self.id}")
+                return True
+            else:
+                logger.warning(f"No data was synced for ring {self.id}")
+                return False
         except Exception as e:
             logger.error(f"Error syncing historical data for ring {self.id}: {e}")
             return False
@@ -497,13 +520,38 @@ class RingManager:
             
             # Handle sqlite3.Row objects which don't have a get method
             ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
+            is_mock = ring_info['is_mock'] if 'is_mock' in ring_info.keys() else 0
             
-            # Check if ColmiClient is available
+            # Check if this is a valid MAC address (should be in format like 00:11:22:33:44:55)
+            is_valid_mac = bool(re.match(r'^([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})$', mac_address))
+            
+            # If it's not a valid MAC or marked as mock, use the mock client
+            if not is_valid_mac or is_mock:
+                logger.warning(f"Using mock client for {ring_name} ({mac_address}) - Valid MAC: {is_valid_mac}, Is Mock: {is_mock}")
+                client = MockColmiR02Client(mac_address)
+                
+                # For mock client, simulate connection
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                connected = loop.run_until_complete(client.connect())
+                loop.close()
+                
+                if connected:
+                    logger.info(f"Connected to mock ring {ring_name} ({mac_address})")
+                    self.clients[mac_address] = client
+                    self.connected_rings[mac_address] = True
+                    self.db.update_ring_connection(ring_id)
+                    return True
+                else:
+                    logger.error(f"Failed to connect to mock ring {ring_name} ({mac_address})")
+                    return False
+            
+            # Check if ColmiClient is available for real connections
             if not COLMI_CLIENT_AVAILABLE:
-                logger.error(f"ColmiClient not available, cannot connect to {ring_name} ({mac_address})")
+                logger.error(f"ColmiClient not available, cannot connect to real ring {ring_name} ({mac_address})")
                 return False
             
-            # Use real client
+            # Use real client for real MAC addresses
             logger.info(f"Using real ColmiClient for {ring_name} ({mac_address})")
             try:
                 client = ColmiClient(mac_address)
@@ -526,13 +574,13 @@ class RingManager:
                 loop.close()
             
             if connected:
-                logger.info(f"Connected to {ring_name} ({mac_address})")
+                logger.info(f"Connected to real ring {ring_name} ({mac_address})")
                 self.clients[mac_address] = client
                 self.connected_rings[mac_address] = True
                 self.db.update_ring_connection(ring_id)
                 return True
             else:
-                logger.error(f"Failed to connect to {ring_name} ({mac_address})")
+                logger.error(f"Failed to connect to real ring {ring_name} ({mac_address})")
                 return False
                 
         except Exception as e:

@@ -19,8 +19,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("zeddring.scanner")
 
-# Define the Colmi device name pattern
-COLMI_DEVICE_PATTERN = re.compile(r'colmi', re.IGNORECASE)
+# Define the Colmi device name pattern - match more possible names
+COLMI_DEVICE_PATTERN = re.compile(r'(colmi|r02|smart\s*ring|band|watch)', re.IGNORECASE)
 
 @dataclass
 class ColmiDevice:
@@ -162,7 +162,21 @@ def scan_with_bluetoothctl() -> List[Dict[str, Any]]:
 def is_colmi_device(device: Dict[str, Any]) -> bool:
     """Check if a device is a Colmi device based on its name."""
     name = device.get("name", "").lower()
-    return bool(COLMI_DEVICE_PATTERN.search(name))
+    
+    # Check for common patterns in device names
+    if COLMI_DEVICE_PATTERN.search(name):
+        return True
+        
+    # Check for specific MAC address prefixes known to be used by Colmi devices
+    # (This is a placeholder - you would need to add actual known prefixes)
+    mac = device.get("address", "").lower()
+    known_prefixes = ["a4:c1", "00:1a", "ac:23"]  # Example prefixes, replace with actual ones
+    
+    for prefix in known_prefixes:
+        if mac.startswith(prefix.lower().replace(":", "")):
+            return True
+            
+    return False
 
 async def scan_for_devices(timeout: int = 10) -> List[Dict[str, Any]]:
     """
