@@ -11,8 +11,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create bluetooth group and set permissions
-RUN addgroup --system bluetooth && \
-    adduser --system --ingroup bluetooth bluetooth
+RUN addgroup --system bluetooth || true && \
+    adduser --system --ingroup bluetooth bluetooth || true
 
 # Copy requirements first for better caching
 COPY requirements.txt .
