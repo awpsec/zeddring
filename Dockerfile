@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dbus \
     usbutils \
     procps \
+    git \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,9 +23,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Make start script executable
-RUN chmod +x start.sh
-
 # Expose port
 EXPOSE 5000
 
@@ -32,5 +30,5 @@ EXPOSE 5000
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_APP=zeddring.web
 
-# Run the start script
-CMD ["./start.sh"] 
+# Run the application using the app.py entry point
+CMD ["python", "-m", "zeddring.app"] 
