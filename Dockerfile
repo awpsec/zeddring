@@ -20,6 +20,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Verify colmi_r02_client installation
+RUN python -c "from colmi_r02_client import Client; print('ColmiClient successfully imported')" || echo "Warning: ColmiClient not available"
+
 # Copy application code
 COPY . .
 

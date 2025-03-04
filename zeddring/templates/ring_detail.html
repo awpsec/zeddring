@@ -14,7 +14,7 @@
         <h1>
             {{ ring.name }}
             <div class="battery-indicator">
-                <div class="battery-level" id="battery-level-indicator" style="width: {{ ring.battery_level or ring.latest_battery or 0 }}%"></div>
+                <div class="battery-level {% if ring.battery_level or ring.latest_battery %}{% if (ring.battery_level or ring.latest_battery) >= 75 %}high{% elif (ring.battery_level or ring.latest_battery) >= 50 %}medium{% elif (ring.battery_level or ring.latest_battery) >= 25 %}low{% else %}critical{% endif %}{% endif %}" id="battery-level-indicator" data-battery-level="{{ ring.battery_level or ring.latest_battery or 0 }}"></div>
             </div>
         </h1>
         <nav>
@@ -135,17 +135,22 @@
     </footer>
     
     <script>
+        // Wait for the DOM to be fully loaded
         document.addEventListener('DOMContentLoaded', function() {
-            const ringId = {{ ring.id }};
+            // Ring ID from the page
+            const ringId = "{{ ring.id }}";
+            
+            // Chart objects
             let heartRateChart = null;
             let stepsChart = null;
             let batteryChart = null;
             
-            // Update battery indicator
+            // Update battery indicator function
             function updateBatteryIndicator(level) {
                 const batteryLevel = document.getElementById('battery-level-indicator');
                 if (!batteryLevel) return;
                 
+                // Set the width based on the battery level
                 batteryLevel.style.width = level + '%';
                 
                 // Remove all classes
@@ -163,9 +168,14 @@
                 }
             }
             
-            // Initialize battery indicator
-            const initialBatteryLevel = {{ ring.battery_level or ring.latest_battery or 0 }};
-            updateBatteryIndicator(initialBatteryLevel);
+            // Initialize battery indicator with the current level
+            const batteryIndicator = document.getElementById('battery-level-indicator');
+            if (batteryIndicator) {
+                const batteryLevel = batteryIndicator.getAttribute('data-battery-level');
+                if (batteryLevel) {
+                    updateBatteryIndicator(parseInt(batteryLevel));
+                }
+            }
             
             // Initialize charts
             function initCharts() {

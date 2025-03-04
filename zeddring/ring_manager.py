@@ -73,24 +73,28 @@ class Ring:
         
     async def connect(self):
         """Connect to the ring."""
-        if self.connected:
-            logger.warning(f"Ring {self.mac_address} is already connected")
-            return True
-            
         try:
-            if COLMI_CLIENT_AVAILABLE:
-                self.client = ColmiClient(self.mac_address)
-                await self.client.connect()
-            else:
-                self.client = MockColmiR02Client(self.mac_address)
-                await self.client.connect()
+            # Check if ColmiClient is available
+            if not COLMI_CLIENT_AVAILABLE:
+                logger.error(f"ColmiClient not available, cannot connect to {self.name} ({self.mac_address})")
+                return False
                 
-            self.connected = True
-            logger.info(f"Connected to ring {self.mac_address}")
-            return True
+            # Create a new client
+            self.client = ColmiClient(self.mac_address)
+            
+            # Connect to the ring
+            connected = await self.client.connect()
+            
+            if connected:
+                logger.info(f"Connected to {self.name} ({self.mac_address})")
+                self.connected = True
+                return True
+            else:
+                logger.error(f"Failed to connect to {self.name} ({self.mac_address})")
+                return False
+                
         except Exception as e:
-            logger.error(f"Error connecting to ring {self.mac_address}: {e}")
-            self.connected = False
+            logger.error(f"Error connecting to {self.name} ({self.mac_address}): {e}")
             return False
             
     async def disconnect(self):
@@ -218,37 +222,40 @@ class Ring:
             return False
             
     async def set_ring_time(self):
-        """Set the time on the ring to match the server time."""
-        if not self.client or not hasattr(self.client, 'set_time'):
+        """Set the time on the ring."""
+        if not self.connected:
+            logger.error(f"Ring {self.name} ({self.mac_address}) is not connected")
+            return False
+            
+        if not self.client:
+            logger.error(f"No client available for ring {self.name} ({self.mac_address})")
             return False
             
         try:
-            logger.info(f"Setting time for ring {self.id}")
             current_time = datetime.now()
-            success = await self.client.set_time(current_time)
-            logger.info(f"Time set for ring {self.id}: {success}")
-            return success
+            await self.client.set_time(current_time)
+            logger.info(f"Set time on ring {self.name} ({self.mac_address}) to {current_time}")
+            return True
         except Exception as e:
-            logger.error(f"Error setting time for ring {self.id}: {e}")
+            logger.error(f"Error setting time on ring {self.name} ({self.mac_address}): {e}")
             return False
             
     async def reboot(self):
         """Reboot the ring."""
-        if not self.client or not hasattr(self.client, 'reboot'):
-            logger.warning(f"Ring {self.id} client does not support reboot")
+        if not self.connected:
+            logger.error(f"Ring {self.name} ({self.mac_address}) is not connected")
+            return False
+            
+        if not self.client:
+            logger.error(f"No client available for ring {self.name} ({self.mac_address})")
             return False
             
         try:
-            logger.info(f"Rebooting ring {self.id}")
-            success = await self.client.reboot()
-            if success:
-                self.connected = False
-                logger.info(f"Ring {self.id} is rebooting")
-            else:
-                logger.warning(f"Failed to reboot ring {self.id}")
-            return success
+            await self.client.reboot()
+            logger.info(f"Rebooted ring {self.name} ({self.mac_address})")
+            return True
         except Exception as e:
-            logger.error(f"Error rebooting ring {self.id}: {e}")
+            logger.error(f"Error rebooting ring {self.name} ({self.mac_address}): {e}")
             return False
 
 class RingManager:
@@ -440,13 +447,14 @@ class RingManager:
             # Handle sqlite3.Row objects which don't have a get method
             ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
             
-            # Only use real client - we're removing mock functionality
-            if COLMI_CLIENT_AVAILABLE:
-                logger.info(f"Using real ColmiClient for {ring_name} ({mac_address})")
-                client = ColmiClient(mac_address)
-            else:
+            # Check if ColmiClient is available
+            if not COLMI_CLIENT_AVAILABLE:
                 logger.error(f"ColmiClient not available, cannot connect to {ring_name} ({mac_address})")
                 return False
+            
+            # Use real client
+            logger.info(f"Using real ColmiClient for {ring_name} ({mac_address})")
+            client = ColmiClient(mac_address)
             
             # Connect
             connected = False
@@ -467,66 +475,13 @@ class RingManager:
                 self.clients[mac_address] = client
                 self.connected_rings[mac_address] = True
                 self.db.update_ring_connection(ring_id)
-                
-                # Try to sync historical data after connecting
-                try:
-                    logger.info(f"Syncing historical data for ring {ring_name} ({mac_address})")
-                    
-                    # Get last sync time
-                    last_sync = ring_info.get('last_sync')
-                    if last_sync:
-                        try:
-                            last_sync = datetime.fromisoformat(last_sync)
-                            logger.info(f"Last sync for {ring_name} was at {last_sync}")
-                        except ValueError:
-                            last_sync = datetime.now() - datetime.timedelta(days=7)
-                            logger.warning(f"Invalid last_sync format for {ring_name}, using 7 days ago")
-                    else:
-                        last_sync = datetime.now() - datetime.timedelta(days=7)
-                        logger.info(f"No previous sync for {ring_name}, using 7 days ago")
-                    
-                    # Get historical data
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    historical_data = loop.run_until_complete(client.get_historical_data(since=last_sync))
-                    loop.close()
-                    
-                    if historical_data and 'steps_history' in historical_data:
-                        for entry in historical_data['steps_history']:
-                            timestamp = entry.get('timestamp')
-                            steps = entry.get('value')
-                            if timestamp and steps:
-                                # Convert timestamp to datetime if needed
-                                if isinstance(timestamp, str):
-                                    timestamp = datetime.fromisoformat(timestamp)
-                                # Add to database with specific timestamp
-                                self.db.add_steps_with_timestamp(ring_id, steps, timestamp)
-                                
-                    if historical_data and 'heart_rate_history' in historical_data:
-                        for entry in historical_data['heart_rate_history']:
-                            timestamp = entry.get('timestamp')
-                            heart_rate = entry.get('value')
-                            if timestamp and heart_rate:
-                                # Convert timestamp to datetime if needed
-                                if isinstance(timestamp, str):
-                                    timestamp = datetime.fromisoformat(timestamp)
-                                # Add to database with specific timestamp
-                                self.db.add_heart_rate_with_timestamp(ring_id, heart_rate, timestamp)
-                    
-                    # Update last sync time
-                    now = datetime.now()
-                    self.db.update_ring(ring_id, {'last_sync': now.isoformat()})
-                    logger.info(f"Historical data sync completed for ring {ring_name} and updated last_sync to {now}")
-                except Exception as e:
-                    logger.error(f"Error syncing historical data: {e}")
-                
                 return True
             else:
-                logger.error(f"Failed to connect to {ring_name} ({mac_address}) after all attempts")
+                logger.error(f"Failed to connect to {ring_name} ({mac_address})")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error in _connect_to_ring for {mac_address}: {e}")
+            logger.error(f"Error connecting to ring: {e}")
             return False
 
     def _connect_and_get_data(self, mac_address: str, ring_id: int) -> None:
@@ -768,27 +723,43 @@ class RingManager:
     async def connect_ring(self, ring_id: int) -> bool:
         """Connect to a ring."""
         try:
-            # Get the ring from the database
-            ring = self.db.get_ring(ring_id)
-            if not ring:
-                logger.error(f"Ring {ring_id} not found")
+            # Get ring info from database
+            ring_info = self.db.get_ring(ring_id)
+            if not ring_info:
+                logger.error(f"Ring {ring_id} not found in database")
                 return False
-                
-            # Get the MAC address
-            mac_address = ring['mac_address']
             
-            # Connect to the ring
-            connected = await self._connect_to_ring(mac_address, ring_id)
-            if not connected:
-                logger.error(f"Failed to connect to ring {ring_id}")
+            # Handle sqlite3.Row objects which don't have a get method
+            mac_address = ring_info['mac_address'] if 'mac_address' in ring_info.keys() else None
+            ring_name = ring_info['name'] if 'name' in ring_info.keys() else 'Unknown Ring'
+            
+            if not mac_address:
+                logger.error(f"Ring {ring_id} has no MAC address")
                 return False
                 
-            # Set the time on the ring
-            if ring_id in self.clients:
-                await self.clients[mac_address].set_ring_time()
+            logger.info(f"Attempting to connect to ring {ring_id} ({mac_address})")
+            
+            # Check if ColmiClient is available
+            if not COLMI_CLIENT_AVAILABLE:
+                logger.error(f"ColmiClient not available, cannot connect to {ring_name} ({mac_address})")
+                return False
                 
-            logger.info(f"Connected to ring {ring_id}")
-            return True
+            # Create a temporary Ring object to connect
+            temp_ring = Ring(ring_id, ring_name, mac_address)
+            
+            # Connect using the Ring object
+            connected = await temp_ring.connect()
+            
+            if connected:
+                # Store the client
+                self.clients[mac_address] = temp_ring.client
+                self.connected_rings[mac_address] = True
+                self.db.update_ring_connection(ring_id)
+                return True
+            else:
+                logger.error(f"Failed to connect to ring {ring_id} ({mac_address})")
+                return False
+                
         except Exception as e:
             logger.error(f"Error connecting to ring {ring_id}: {e}")
             return False

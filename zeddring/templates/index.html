@@ -35,7 +35,7 @@
                                 {{ ring.name }}
                                 {% if ring.battery is defined %}
                                 <div class="battery-indicator">
-                                    <div class="battery-level {% if ring.battery >= 75 %}high{% elif ring.battery >= 50 %}medium{% elif ring.battery >= 25 %}low{% else %}critical{% endif %}" style="width: {{ ring.battery }}%;"></div>
+                                    <div class="battery-level {% if ring.battery >= 75 %}high{% elif ring.battery >= 50 %}medium{% elif ring.battery >= 25 %}low{% else %}critical{% endif %}" id="battery-level-{{ ring.id }}" data-battery-level="{{ ring.battery }}"></div>
                                 </div>
                                 {% endif %}
                             </h3>
@@ -108,5 +108,29 @@
     <footer>
         <p>&copy; 2025 Zeddring</p>
     </footer>
+    
+    <script>
+        // Wait for the DOM to be fully loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Set battery indicator widths for each ring
+            // This code will be executed for each ring with a battery level
+            
+            // Get all battery indicators
+            const batteryIndicators = document.querySelectorAll('.battery-level');
+            
+            // Set the width for each indicator based on its data attribute
+            batteryIndicators.forEach(function(indicator) {
+                const id = indicator.id;
+                if (id && id.startsWith('battery-level-')) {
+                    const ringId = id.replace('battery-level-', '');
+                    // Get the battery level from the data attribute
+                    const batteryLevel = indicator.getAttribute('data-battery-level');
+                    if (batteryLevel) {
+                        indicator.style.width = batteryLevel + '%';
+                    }
+                }
+            });
+        });
+    </script>
 </body>
 </html> 
