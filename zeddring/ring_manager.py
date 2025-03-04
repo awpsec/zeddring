@@ -207,10 +207,15 @@ class Ring:
                             timestamp = datetime.fromisoformat(timestamp)
                         # Add to database with specific timestamp
                         self.db.add_heart_rate_with_timestamp(self.id, heart_rate, timestamp)
+            
+            # Update the last sync time in the database
+            self.db.update_last_sync(self.id)
                         
             logger.info(f"Historical data sync completed for ring {self.id}")
+            return True
         except Exception as e:
             logger.error(f"Error syncing historical data for ring {self.id}: {e}")
+            return False
             
     async def set_ring_time(self):
         """Set the time on the ring to match the server time."""
@@ -219,12 +224,31 @@ class Ring:
             
         try:
             logger.info(f"Setting time for ring {self.id}")
-            current_time = datetime.datetime.now()
+            current_time = datetime.now()
             success = await self.client.set_time(current_time)
             logger.info(f"Time set for ring {self.id}: {success}")
             return success
         except Exception as e:
             logger.error(f"Error setting time for ring {self.id}: {e}")
+            return False
+            
+    async def reboot(self):
+        """Reboot the ring."""
+        if not self.client or not hasattr(self.client, 'reboot'):
+            logger.warning(f"Ring {self.id} client does not support reboot")
+            return False
+            
+        try:
+            logger.info(f"Rebooting ring {self.id}")
+            success = await self.client.reboot()
+            if success:
+                self.connected = False
+                logger.info(f"Ring {self.id} is rebooting")
+            else:
+                logger.warning(f"Failed to reboot ring {self.id}")
+            return success
+        except Exception as e:
+            logger.error(f"Error rebooting ring {self.id}: {e}")
             return False
 
 class RingManager:

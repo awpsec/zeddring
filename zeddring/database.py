@@ -43,6 +43,8 @@ def init_db():
         mac_address TEXT UNIQUE NOT NULL,
         last_connected TIMESTAMP,
         battery_level INTEGER,
+        is_mock INTEGER DEFAULT 0,
+        last_sync TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     ''')
@@ -80,18 +82,32 @@ def init_db():
     )
     ''')
     
-    # Check if battery_level column exists in rings table
+    # Check if required columns exist in rings table
     cursor.execute("PRAGMA table_info(rings)")
     columns = cursor.fetchall()
     column_names = [column[1] for column in columns]
     
-    # Add battery_level column if it doesn't exist
+    # Add missing columns if they don't exist
     if 'battery_level' not in column_names:
         try:
             cursor.execute("ALTER TABLE rings ADD COLUMN battery_level INTEGER")
             logger.info("Added battery_level column to rings table")
         except sqlite3.OperationalError:
             logger.info("battery_level column already exists in rings table")
+    
+    if 'is_mock' not in column_names:
+        try:
+            cursor.execute("ALTER TABLE rings ADD COLUMN is_mock INTEGER DEFAULT 0")
+            logger.info("Added is_mock column to rings table")
+        except sqlite3.OperationalError:
+            logger.info("is_mock column already exists in rings table")
+    
+    if 'last_sync' not in column_names:
+        try:
+            cursor.execute("ALTER TABLE rings ADD COLUMN last_sync TIMESTAMP")
+            logger.info("Added last_sync column to rings table")
+        except sqlite3.OperationalError:
+            logger.info("last_sync column already exists in rings table")
     
     conn.commit()
     conn.close()
@@ -389,6 +405,40 @@ class Database:
             logger.error(f"Error updating battery level for ring {ring_id}: {e}")
         finally:
             conn.close()
+            
+    def update_ring_mock_status(self, ring_id: int, is_mock: bool) -> None:
+        """Update the mock status for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute(
+                "UPDATE rings SET is_mock = ? WHERE id = ?",
+                (1 if is_mock else 0, ring_id)
+            )
+            conn.commit()
+            logger.info(f"Updated mock status for ring {ring_id} to {is_mock}")
+        except Exception as e:
+            logger.error(f"Error updating mock status for ring {ring_id}: {e}")
+        finally:
+            conn.close()
+            
+    def update_last_sync(self, ring_id: int) -> None:
+        """Update the last sync timestamp for a ring."""
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            cursor.execute(
+                "UPDATE rings SET last_sync = CURRENT_TIMESTAMP WHERE id = ?",
+                (ring_id,)
+            )
+            conn.commit()
+            logger.info(f"Updated last sync time for ring {ring_id}")
+        except Exception as e:
+            logger.error(f"Error updating last sync time for ring {ring_id}: {e}")
+        finally:
+            conn.close()
 
     def add_heart_rate_with_timestamp(self, ring_id: int, value: int, timestamp: datetime.datetime) -> None:
         """Add a heart rate reading with a specific timestamp."""
@@ -438,5 +488,40 @@ class Database:
             logger.debug(f"Added battery {value}% for ring {ring_id} at {timestamp}")
         except Exception as e:
             logger.error(f"Error adding battery for ring {ring_id}: {e}")
+        finally:
+            conn.close()
+
+    def update_ring(self, ring_id: int, data: Dict[str, Any]) -> None:
+        """Update ring data with the provided dictionary."""
+        if not data:
+            return
+            
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Build the SET part of the SQL query
+            set_parts = []
+            values = []
+            
+            for key, value in data.items():
+                set_parts.append(f"{key} = ?")
+                values.append(value)
+                
+            if not set_parts:
+                return
+                
+            # Add the ring_id to the values
+            values.append(ring_id)
+            
+            # Execute the update query
+            cursor.execute(
+                f"UPDATE rings SET {', '.join(set_parts)} WHERE id = ?",
+                values
+            )
+            conn.commit()
+            logger.info(f"Updated ring {ring_id} with data: {data}")
+        except Exception as e:
+            logger.error(f"Error updating ring {ring_id}: {e}")
         finally:
             conn.close() 

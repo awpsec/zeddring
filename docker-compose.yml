@@ -27,13 +27,11 @@ services:
       - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket
       - SECRET_KEY=zeddring_secret_key_change_in_production
       - ZEDDRING_DB_PATH=/app/data/zeddring_data.sqlite
-      - ZEDDRING_SCAN_INTERVAL=20
+      - ZEDDRING_SCAN_INTERVAL=15
       - ZEDDRING_SCAN_TIMEOUT=10
       - ZEDDRING_MAX_RETRY_ATTEMPTS=3
       - ZEDDRING_RETRY_DELAY=300
       - ZEDDRING_WEB_HOST=0.0.0.0
       - ZEDDRING_WEB_PORT=5000
       - ZEDDRING_DEBUG=False
-      - ZEDDRING_PERSISTENT_CONNECTION=True
-    ports:
-      - "5000:5000" 
+      - ZEDDRING_PERSISTENT_CONNECTION=True 
